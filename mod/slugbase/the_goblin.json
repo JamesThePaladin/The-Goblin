@@ -1,0 +1,38 @@
+{
+	"id": "Goblin",
+	"name": "The Goblin",
+	"description": "A small slugcat with big ol' ears. He enjoys finding shiny things and storing them in his claimed shelter.",
+	"features": {
+		"color": "00FFFF",
+		"auto_grab_batflies" : "true",
+		"weight": [0.8, 0.6],
+		"tunnel_speed": [1.2, 1],
+		"climb_speed": [1.2, 1],
+		"walk_speed": [1.2, 1],
+		"crouch_stealth": [1.2, 1],
+		"throw_skill": [2, 1],
+		"lung_capacity": [1.2, 1],
+		"loudness": [0.8, 0.6],
+		"alignments": {
+			"Scavengers": { "like": 1, "locked": true }
+		  },
+		"diet": {
+			"base": "Red",
+			"corpses": 1.0,
+			"plants": 1.0,
+  			"overrides": {
+    			"Scavenger": -1
+  			}
+		},
+		"back_spear": true,
+		"can_maul": true,
+		"maul_blacklist": [ "Scavenger" ],
+		"maul_damage": 1.5,
+		"karma": 2,
+		"karma_cap": 6,
+		
+		
+		"select_menu_scene": "Slugcat_Goblin",
+		"select_menu_scene_ascended": "Ghost_Goblin"
+	}
+}
