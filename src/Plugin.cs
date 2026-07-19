@@ -51,6 +51,7 @@ namespace SlugTemplate
             // EXPERIMENT — remove once the body-scale question is settled.
             On.Player.ctor += Player_ctor_BodyScale;
             On.Player.Update += Player_Update_ScaleDiagnostics;
+            On.SlugcatStats.ctor += SlugcatStats_ctor_Diagnostics;
         }
 
         // Set from OnEnable so the static hook helpers can log. BepInEx writes to
@@ -163,15 +164,76 @@ namespace SlugTemplate
             // PlayerFloats("weight", 1, 2) — identical in shape to the speed features — and
             // sets bodyWeightFac = ApplyStarve(weight, Mathf.Min(weight[0], 0.9f), ...), which
             // should give 0.8. So the suspicion is TryGet returning false. Ask it directly.
-            bool gotWeight = PlayerFeatures.WeightMul.TryGet(self, out float[] weightValues);
-            _log?.LogInfo($"[bodyscale] WeightMul.TryGet={gotWeight} " +
-                          $"values={(weightValues == null ? "null" : string.Join(", ", weightValues))}");
+            ApplyWeightWorkaround(self);
             _log?.LogInfo($"[bodyscale] applied {scale:0.###} -> rad0={self.bodyChunks[0].rad:0.##} " +
                           $"rad1={self.bodyChunks[1].rad:0.##} dist={self.bodyChunkConnections[0].distance:0.##} " +
                           $"mass={self.TotalMass:0.###} (vanilla: 9 / 8 / 17) | " +
                           $"stats: bodyWeightFac={stats?.bodyWeightFac ?? -1f:0.###} " +
                           $"runspeedFac={stats?.runspeedFac ?? -1f:0.###} " +
+                          $"poleClimb={stats?.poleClimbSpeedFac ?? -1f:0.###} " +
+                          $"corridorClimb={stats?.corridorClimbSpeedFac ?? -1f:0.###} " +
+                          $"loudness={stats?.loudnessFac ?? -1f:0.###} " +
+                          $"lungs={stats?.lungsFac ?? -1f:0.###} " +
                           $"player#{self.playerState?.playerNumber ?? -1}");
+        }
+
+        // WORKAROUND, not a root-cause fix. SlugBase's `weight` is the only feature that does
+        // not reach the Goblin's SlugcatStats: measured at Player..ctor, walk/climb/tunnel/
+        // loudness/lungs all apply correctly, but bodyWeightFac stays vanilla 1.0. SlugBase
+        // reads the value fine (WeightMul.TryGet=True, values=0.4/0.2) and its ApplyStarve
+        // returns values[0] for a non-malnourished slugcat, so it should be writing 0.4.
+        // Why it doesn't is still unexplained — see PLAN.md. We set it ourselves.
+        //
+        // Set bodyWeightFac, NOT the chunk masses: Player.SetMalnourished recomputes
+        //     bodyChunks[i].mass = 0.7f * slugcatStats.bodyWeightFac / 2f
+        // whenever starve state changes, so a raw mass write would be silently reverted.
+        // We mirror that same formula to fix up the masses the constructor just set.
+        private static void ApplyWeightWorkaround(Player self)
+        {
+            if (!PlayerFeatures.WeightMul.TryGet(self, out float[] weights) || weights == null || weights.Length == 0)
+                return;
+
+            var stats = self.slugcatStats;
+            if (stats == null)
+                return;
+
+            float wanted = (stats.malnourished && weights.Length > 1) ? weights[1] : weights[0];
+            if (Math.Abs(stats.bodyWeightFac - wanted) < 0.001f)
+                return;   // SlugBase got there after all — leave it alone.
+
+            float before = stats.bodyWeightFac;
+            stats.bodyWeightFac = wanted;
+
+            float mass = 0.7f * wanted;
+            foreach (var chunk in self.bodyChunks)
+                chunk.mass = mass / 2f;
+
+            _log?.LogInfo($"[weightfix] bodyWeightFac {before:0.###} -> {wanted:0.###} " +
+                          $"(malnourished={stats.malnourished}); TotalMass now {self.TotalMass:0.###}");
+        }
+
+        // Catches every SlugcatStats construction, so we can see the state SlugBase actually
+        // leaves the object in — as opposed to the state Player..ctor later observes.
+        //
+        // The puzzle: SlugBase's own SlugcatStats.ctor hook reads weight correctly
+        // (WeightMul.TryGet=True values=0.4,0.2) and ApplyStarve on a non-malnourished
+        // slugcat returns values[0], so bodyWeightFac SHOULD be 0.4. Player..ctor sees 1.0,
+        // yet sees runspeedFac=1.75 from the very same hook. Either weight is skipped at
+        // construction, or something resets it afterwards. This tells us which.
+        //
+        // Our hook is registered after SlugBase's, so calling orig() first runs SlugBase's
+        // inner hook and we observe the finished object.
+        private static void SlugcatStats_ctor_Diagnostics(On.SlugcatStats.orig_ctor orig, SlugcatStats self, SlugcatStats.Name slugcat, bool malnourished)
+        {
+            orig(self, slugcat, malnourished);
+
+            if (slugcat == null || slugcat.value != GoblinName)
+                return;
+
+            _log?.LogInfo($"[stats-ctor] name={slugcat.value} malnourished={malnourished} " +
+                          $"bodyWeightFac={self.bodyWeightFac:0.###} runspeedFac={self.runspeedFac:0.###} " +
+                          $"poleClimb={self.poleClimbSpeedFac:0.###} corridorClimb={self.corridorClimbSpeedFac:0.###} " +
+                          $"loudness={self.loudnessFac:0.###} lungs={self.lungsFac:0.###} throw={self.throwingSkill}");
         }
 
         private static int _diagTicks;

@@ -172,6 +172,57 @@ Also in her block but **water, excluded**: `swimBoostCost` 0.025, `swimBoostCool
 These are keyed on slugcat *name* in `SlugcatStats`, so they can never leak to the
 Goblin regardless of what we hook.
 
+#### SlugBase array semantics — `[normal, malnourished]`, NOT `[max, min]`
+From `FeatureHooks.ApplyStarve`:
+
+```csharp
+static T ApplyStarve<T>(T[] values, T starveDefault, ref ctx)
+    => ctx.malnourished ? (values.Length > 1 ? values[1] : starveDefault)
+                        : values[0];
+```
+
+Index 0 is the well-fed value; **index 1 applies only while starving**. To make a stat immune
+to hunger, repeat the number. Passing a single value instead of an array uses a per-feature
+fallback (`weight` uses `Mathf.Min(value, 0.9f)`), so prefer arrays.
+
+`lung_capacity` is **inverted** on the way in: `lungsFac = 1f / ApplyStarve(...)`. So higher
+JSON = better breath. Verified in-game: `1.2` → `lungsFac 0.833`.
+
+**Decision 2026-07-19 — starvation penalties removed** (`walk/climb/tunnel/crouch/throw/lungs`
+now repeat their value). Two reasons: the entire point of the speed work is keeping pace with
+Rivulet, and dropping to 1.0 while malnourished would strand him exactly when things are going
+badly; and he's now a **carnivore** (see diet below), so he hits malnourished more often than a
+slugcat who can graze. `weight` deliberately keeps its `[0.4, 0.2]` split — being lighter when
+starving is coherent.
+
+#### Diet — intentionally carnivore ("kill to eat")
+`"base": "Red"` + `"plants": 0.2` + `"corpses": 1.0` is **deliberate design, not a stray edit.**
+Fruit is near-worthless; he has to hunt. Confirmed in-game 2026-07-19. Do not "fix" the low
+`plants` value. (This was briefly mistaken for Rivulet's diet leaking through the `isRivulet`
+detour — it isn't: there are **zero** `isRivulet` branches in any eating/food/nourishment
+method, and food routes through `SlugcatStats.NourishmentOfObjectEaten(SlugcatStats.Name, …)`,
+keyed on name.)
+
+#### 🐞 `weight` does not apply — worked around, root cause UNKNOWN
+Measured at `Player..ctor`: `runspeed 1.75`, `poleClimb 1.8`, `corridorClimb 1.6`,
+`loudness 0.4`, `lungs 0.833` all applied correctly — **`bodyWeightFac` stayed vanilla 1.0**.
+SlugBase reads the feature fine (`WeightMul.TryGet=True values=0.4, 0.2`) and `ApplyStarve`
+provably returns `values[0]` for a non-malnourished slugcat, so it *should* be writing 0.4.
+No explanation found; the weight block sits in the same `SlugcatStats_ctor` hook as the speeds
+that do work.
+
+**Workaround in `Plugin.cs` (`ApplyWeightWorkaround`)**: set `bodyWeightFac` from the JSON in
+our `Player..ctor` hook, and no-op if SlugBase ever starts working.
+
+**Critical detail — set `bodyWeightFac`, never the chunk masses.** `Player.SetMalnourished`
+recomputes `bodyChunks[i].mass = 0.7f * slugcatStats.bodyWeightFac / 2f` on every starve-state
+change, so a raw mass write is silently reverted the first time he gets hungry.
+
+*Note for hook authors:* SlugBase registers its hooks in `OnModsInit`, i.e. **after** a plugin's
+`OnEnable`. So SlugBase's hook is the OUTER one — calling `orig()` from a hook registered in
+`OnEnable` observes the state *before* SlugBase applies anything. This invalidated a diagnostic
+mid-investigation; don't repeat it.
+
 ### 1b. Keep-up movement — Rivulet's jump kit ❌
 **The design goal:** the Goblin keeps up with Rivulet in co-op without being a clone.
 Her jump constants are hardcoded in `Player`, not JSON — but **not** as scattered
