@@ -98,7 +98,12 @@ Remaining real work: Rivulet movement parity, the sprite atlas, and wall-walking
 
 ## Core principle: multiplayer-first
 
-This is being built for Jolly Co-op, so **every hook gates on "is this actually my slugcat" from the very first one** — don't retrofit it later. SlugBase provides `IsMe(Player)` / `IsMe(RainWorldGame)` checks for exactly this. Mark the character multi-instance in its constructor and make each hook a no-op for any player that isn't this slugcat.
+This is being built for Jolly Co-op, so **every hook gates on "is this actually my slugcat" from the very first one** — don't retrofit it later. **Note (verified against SlugBase 2.9.3): there is no `IsMe` method** — that API name is stale. The real pattern:
+- **Feature-keyed hook:** `feature.TryGet(player, out val)` *is* the gate. Its decompiled body reads `player.SlugCatClass`, looks up that name's `SlugBaseCharacter`, and returns true only if that character has the feature — so it's automatically false for other co-op players (Rivulet, Survivor, …).
+- **Hook with no feature to key on:** compare `player.SlugCatClass` against the Goblin's registered `SlugcatStats.Name`.
+- **Game-level:** `GameFeature<T>.TryGet(RainWorldGame, out val)`.
+
+Mark the character multi-instance in its constructor and make each hook a no-op for any player that isn't this slugcat.
 
 Co-op facts that matter for design:
 - Each slugcat has its **own reputation counter and gain rate** in co-op. Good — the friendly-with-scavengers feature will apply to this slugcat specifically, not the whole lobby.
@@ -230,7 +235,7 @@ The player doesn't natively free-climb the way lizards grip terrain, and lizard 
 - **Feel (tentative — confirm against code):**
   - [x] **Cling-crawl** as the working baseline / fallback.
   - [ ] But aim higher: lizard-grade seamless wall↔floor flow with no speed penalty. Decide how close we can get once the lizard code is read.
-- **Multiplayer:** all of the above must gate on `IsMe`, and stick forces / attachment state need to behave with multiple players and player-player collision.
+- **Multiplayer:** all of the above must gate per-player (feature `TryGet(player)`, or a `player.SlugCatClass` compare — see "multiplayer-first"; no `IsMe` in SlugBase 2.9.3), and stick forces / attachment state need to behave with multiple players and player-player collision.
 - **Parked topic (James to explain at the machine):** how Rain World *backgrounds* work — reportedly beautiful and slightly complex. Relevant to how rooms/surfaces are represented; James will break this down when we're in the code.
 - **Decompiled-code checklist:**
   - [ ] Lizard terrain-grip logic — reusable tile-evaluation concepts.
@@ -244,7 +249,7 @@ The player doesn't natively free-climb the way lizards grip terrain, and lizard 
 - [x] **Salvage `JamesThePaladin/The-Goblin`** — done (see salvage section). JSON recovered + corrected; code was untouched template.
 - [ ] **Apply the two JSON fixes** — `auto_grab_batflies` → boolean `true`; fix or remove the ascended/ghost scene.
 - [ ] **SlugBase stability post-1.5 / The Watcher.** The DLC + 1.5 update reportedly broke some SlugBase custom-feature and arena functionality around late 2025. Confirm the current SlugBase release is stable against the installed game version.
-- [ ] **Jolly Co-op state.** As of the 1.5 update, Jolly Co-op is officially supported in The Watcher campaign and retroactively across all five Downpour campaigns (supersedes the buggy community "Jolly Co-op for the Watcher" mod). Confirm current status and that a **custom SlugBase slugcat** works in co-op (multi-instance / `IsMe`).
+- [ ] **Jolly Co-op state.** As of the 1.5 update, Jolly Co-op is officially supported in The Watcher campaign and retroactively across all five Downpour campaigns (supersedes the buggy community "Jolly Co-op for the Watcher" mod). Confirm current status and that a **custom SlugBase slugcat** works in co-op (multi-instance / per-player feature gating).
 - [ ] **Worldstate/timeline — DEFERRED while co-op-only.** Co-op players run in the *host's* campaign world, so the Goblin's own `world_state`/`start_room` don't drive anything yet. (When he later becomes a standalone campaign character: inherit Survivor/White baseline; avoid Saint/frozen and Rivulet/flooded; set explicitly. Watcher-era note: timelines are distinct from slugcats and custom ones don't inherit spawns/connections as cleanly.)
 - [ ] **Confirm co-op selectability + "co-op-only" behavior.** Verify the custom Goblin actually appears as a selectable Player-2+ slugcat in Jolly Co-op (custom SlugBase slugcats may need their campaign considered "unlocked"). Also note: removing the select scenes does NOT guarantee he's hidden from the single-player carousel — no clean SlugBase "co-op-only" flag was found. For a WIP this likely doesn't matter; revisit if true hiding is wanted.
 - [x] **Sprite guide** — gathered: *Dress My Slugcat* tutorial (folded into Feature 3). Also grab the DMS `ModTemplate.zip` (labeled templates + `.txt` files) regardless of DMS-vs-self-contained choice.
@@ -258,8 +263,8 @@ The player doesn't natively free-climb the way lizards grip terrain, and lizard 
 1. **Bare slugcat** — drop the corrected salvaged JSON into a fresh SlugTemplate, confirm it loads in the Remix menu and boots a campaign. This brings in baseline speed + friendly-with-scavengers (both done in that JSON) and validates the toolchain in one step.
 2. **JSON cleanup** — fix `auto_grab_batflies` → boolean `true`; remove both `select_menu_scene*` lines and the ghost scene (co-op-only for now); rename the multiplayer portrait PNGs off `-prototype`.
 3. **Smaller (sprite atlas + limb re-anchor)** — draw the smaller body from scratch, register the `FAtlas`, and in the **same `PlayerGraphics.DrawSprites` hook** offset the hand/leg positions so limbs don't emerge from the cheeks. Art and this one hook together. Sits partly on the code track now (not fully independent), but doesn't depend on the movement hooks.
-4. **Keep-up movement (Rivulet's pace + jump kit)** — first code feature, and hook work. Order: jump-height hook (adapt the `super_jump` example) → pounce/side-wall wall-jump on top of it → tune to Rivulet's real numbers from the Find-Usages pass. Gate on `IsMe`. Both this and wall-walking touch `Player` movement, so do this first and keep the hooks tidy for #5.
-5. **Wall-walking (lizard-flow)** — last. Lizard-code study, confirm the feel, prototype in isolation, integrate with `IsMe` gating and the movement hooks.
+4. **Keep-up movement (Rivulet's pace + jump kit)** — first code feature, and hook work. Order: jump-height hook (adapt the `super_jump` example) → pounce/side-wall wall-jump on top of it → tune to Rivulet's real numbers from the Find-Usages pass. Gate per-player (feature `TryGet(player)`). Both this and wall-walking touch `Player` movement, so do this first and keep the hooks tidy for #5.
+5. **Wall-walking (lizard-flow)** — last. Lizard-code study, confirm the feel, prototype in isolation, integrate with per-player gating and the movement hooks.
 
 ---
 

@@ -6,7 +6,7 @@ Full design + current state + decompile checklists live in **`PLAN.md`** — rea
 ## Non-negotiables
 - **Target .NET Framework 4.8** (`net48`). Never a newer target — .NET 5+ throws `MissingFieldException` on base-game `List<T>` fields at runtime.
 - **Reference `PUBLIC-Assembly-CSharp.dll`** (in `lib/`, sourced from `Rain World/BepInEx/utils`) — NOT the base `Assembly-CSharp.dll`.
-- **Multiplayer (Jolly Co-op) is a hard requirement.** EVERY hook must gate on `IsMe(Player)` / `IsMe(RainWorldGame)` and no-op for other players. Build this in from the first hook, never retrofit.
+- **Multiplayer (Jolly Co-op) is a hard requirement.** EVERY hook must no-op for players who aren't the Goblin — build this in from the first hook, never retrofit. **There is no `IsMe` in SlugBase 2.9.3** (that API name is stale). The real gates: for a feature-keyed hook, `feature.TryGet(player, out val)` *is* the per-player gate — it reads `player.SlugCatClass` internally and returns false for other co-op players; for a hook with no feature to key on, gate on `player.SlugCatClass == <Goblin's SlugcatStats.Name>`; at the game level use `GameFeature<T>.TryGet(RainWorldGame, out val)`.
 - Character is multi-instance; mark it so in the constructor.
 
 ## Toolchain
