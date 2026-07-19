@@ -11,6 +11,10 @@ namespace SlugTemplate
     {
         private const string MOD_ID = "sanctus.thegoblin";
 
+        // The Goblin's SlugcatStats.Name — SlugBase registers this from the JSON "id".
+        // ExtEnum identity is the id string, so we match on that.
+        public const string GoblinName = "Goblin";
+
         //public static readonly PlayerFeature<float> SuperJump = PlayerFloat("thegoblin/super_jump");
         //public static readonly PlayerFeature<bool> ExplodeOnDeath = PlayerBool("thegoblin/explode_on_death");
         //public static readonly GameFeature<float> MeanLizards = GameFloat("thegoblin/mean_lizards");
@@ -21,9 +25,25 @@ namespace SlugTemplate
         {
             On.RainWorld.OnModsInit += Extras.WrapInit(LoadResources);
 
+            // The Goblin is Jolly Co-op-only for now and has no campaign to "beat",
+            // so force him unlocked. SlugBase adds custom slugcats to the single-player
+            // select carousel automatically, but the Jolly Co-op selector additionally
+            // gates on SlugcatStats.SlugcatUnlocked (which SlugBase does NOT hook) — so
+            // without this he loads fine yet never appears as a selectable co-op player.
+            On.SlugcatStats.SlugcatUnlocked += SlugcatStats_SlugcatUnlocked;
+
             // Put your custom hooks here!
             //On.Player.Jump += Player_Jump;
-            
+
+        }
+
+        // Report the Goblin as unlocked; defer to the game for every other slugcat.
+        private static bool SlugcatStats_SlugcatUnlocked(On.SlugcatStats.orig_SlugcatUnlocked orig, SlugcatStats.Name i, RainWorld rainWorld)
+        {
+            if (i != null && i.value == GoblinName)
+                return true;
+
+            return orig(i, rainWorld);
         }
 
         //Load any resources, such as sprites or sounds
