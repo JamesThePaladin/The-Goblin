@@ -316,11 +316,173 @@ So the fix is code, and it lives in the **same `PlayerGraphics.DrawSprites` hook
 - Arm "Obstruction Point" at the low bottom of the frames (arms cross when receding) still applies.
 
 ### Sprite fundamentals (from the guide)
-- Slugcat = **6 sprite parts, ~87 vanilla frames** (PlayerArm 15, HeadA 18, LegsA 32, FaceA/B 20, BodyA 1, HipsA 1). **Frame counts are fixed.**
-- Sprites are **white because color is applied in code (multiply-style)**.
+**Source:** *Dress My Slugcat: Custom Slugcat Tutorial* (Teno Al Mehri et al.) —
+<https://steamcommunity.com/sharedfiles/filedetails/?id=2902555797>
+The guide is written for DMS, but most of its rules are **engine** behaviour and bind us
+even though we're self-contained. Split below — check the DMS-only list before treating any
+rule as a constraint.
+
+**Engine rules (apply to us):**
+- Slugcat = **6 sprite parts, ~87 vanilla frames** (PlayerArm 15, HeadA 18, LegsA 32, FaceA/B 20, BodyA 1, HipsA 1). **Frame counts are fixed** — DMS can't add frames, and for us they're fixed because `PlayerGraphics` indexes frames positionally in code.
+- Sprites are **white because color is applied in code (multiply-style)**. Manually painted colour multiplies against the code colour and goes muddy unless the part is set white.
 - **Color intent (corrected):** `00FFFF` is the **UI/icon** color, not the body. Body is **mostly white with a hand-drawn cyan stripe.** To make that show, keep the body part **white** (set `custom_colors` Body ≈ white so the drawn cyan isn't tinted away) and draw the stripe on the sprite. Confirm the exact SlugBase mapping of `color` vs `custom_colors` Body vs UI when testing.
-- **Pure black `#000000` renders as transparent** — use `#0E0202` for dark markings.
-- Idle head/face expected **roughly symmetrical** (they flip when moving); heavy asymmetry needs the asymmetric template.
+- **Pure black `#000000` renders as transparent** — use `#0E0202` for dark markings. Near-black shades can also go transparent under some room palettes / dark shaders.
+- Sprite colours react to **room shaders, not region palettes**, and can shift hue temporarily.
+- Idle head/face expected **roughly symmetrical** (they flip when moving); heavy asymmetry makes markings visibly "flash" to the opposite side.
+- **Anchors:** expanding a canvas without knowing the anchor location dislocates the sprite from its centre. Expansion must use **even** multipliers. Arms → height only, legs → width only, head/face → both, **body/hips → never** (anchor-sensitive).
+- Arm **"Obstruction Point"** at the low bottom of the frames — arms cross when receding, so heavy low detail betrays it. Worse on large arms.
+
+**`HeadA` frame groups** (18 frames — matters for drawing order and for the ears):
+
+| Frames | Group | Used for |
+|---|---|---|
+| 0–3 | Idle | Standing, facing viewer; 1–3 flash when slightly angled |
+| 4–5 | Turning cycle | Vertical-pole sway, side-angle transition, sleeping |
+| 6–7 | Crawl turn | Tunnel turning in-betweens |
+| 8–17 | Static down | Backflip, peeking from vertical tunnels |
+
+Faces are `FaceA0–A8`, `FaceB0–B8`, plus `FaceDead` and `FaceStunned`; the face auto-flips
+with horizontal movement. Blinking can be faked with idle-head frames **1 and 3** (8, 9, 16,
+17 for other angles). Face detail can also be drawn onto the 15+ unique `HeadA` frames
+directly for smoother turnarounds, at the cost of doing it 15 times.
+
+**⚠ Relevant to the Goblin specifically —** the guide flags as *"perhaps unsolvable"* the
+**inconsistent follow-up of the face on heads that are long, have snoots, or are otherwise
+unconventionally shaped.** The Goblin's pitch is *"big ol' ears."* Ears drawn into `HeadA`
+should be fine (they're part of the head sprite and rotate with it), but anything expected to
+track the *face* will drift. Prototype the head early rather than after the body is finished.
+
+**The tail is not a sprite** — it's a `TriangleMesh` with a UV-mapped texture, so none of the
+frame rules apply to it:
+- Recommended texture **128×64**. Purely white areas take the body colour.
+- The texture **deforms and shrinks toward the tip**; small details vanish there.
+- Keep markings **short** — spots and horizontal stripes stretch; circles will not stay round.
+- The mid-texture band reads as the **underbelly**; it widens hugely at the tip and destroys detail worst there.
+- **Longer tails have a higher chance of clipping through terrain** — a real gameplay-visible glitch, not just cosmetic. Argues for a shortish tail on a small character.
+- Tail physics can't be rewritten by sprite work (it's procedural).
+
+**Atlas packing** (useful even off-DMS): TexturePacker, Data Format **JSON (Hash)**, border
+padding **2**, shape padding **2**. After packing you can edit the `.png` in place; only
+dimension/frame changes require a repack. A `.txt` whose dimensions disagree with its `.png`
+visually breaks the sprites — the classic failure when reusing a template `.txt` against a
+differently-sized sheet.
+
+### Lineage — *Fancy Slugcats* (the original inspiration, now dead)
+Doc: <https://docs.google.com/document/d/1cU_kfwB-CI58MtCpuNJT8Pysl5QU88WyJ5gqfWc-HAY/mobilebasic>
+
+FS is the pre-Downpour mod this whole character came from — "a cosmetic tool that allows you
+to change various aspects of slugcat's body, such as its width, the proportions of the tail
+and ears, as well as the colours," driven by ConfigMachine sliders:
+
+| Group | Parameters |
+|---|---|
+| Body | height, width, fatness |
+| Tail | width, length, roundness |
+| Ears | angle, length, width |
+| Colours | full RGB |
+
+**DO NOT hunt for the binary.** The doc itself says *"FANCY SLUGCATS IS DISCONTINUED FROM
+CURRENT RW VERSION"* and names DMS as its successor. Its dependency stack — ConfigMachine,
+CustomSpritesLoader 1.2, PublicityStunt, CustomAssets — is entirely pre-Downpour and partly
+discontinued even then, so it cannot load on 1.11.8/Watcher. A copy found in the wild is pure
+malware risk for zero function. Sanctus flagged this; agreed and settled.
+
+**What FS tells us that the DMS guide doesn't:**
+- **The ears are procedural, not sprite art.** FS drew dynamic ears from a `Circle20` sprite with angle/length/width parameters. They are an appendage drawn in code — like the tail mesh — *not* pixels on `HeadA`. Good: they dodge the "face drifts on unconventional heads" problem. Bad: they're code we'd have to write.
+- **Exact frame names** (85 = the 87 above minus the 2 `OnTopOfTerrainHand` frames, which reconciles the two documents):
+  - `HeadA0`–`HeadA17`
+  - `FaceA0`–`FaceA8`, `FaceB0`–`FaceB8`, `FaceDead`, `FaceStunned`
+  - `PlayerArm0`–`PlayerArm12`
+  - `BodyA`, `HipsA`
+  - `LegsA0`–`LegsA6`, `LegsAAir0`–`LegsAAir1`, `LegsAClimbing0`–`LegsAClimbing6`, `LegsACrawling0`–`LegsACrawling5`, `LegsAOnPole0`–`LegsAOnPole6`, `LegsAPole`, `LegsAVerticalPole`, `LegsAWall`
+- **Sprite names are case-sensitive** — be consistent across `.png`, `.txt`, and code.
+- "The head sprite will stretch according to the set width" — FS scaled the head rather than swapping art.
+- FS's tail work was a *separate* mod (CustomTails), 128×64 recommended — matches the DMS guide exactly.
+- `OnTopOfTerrainHandFix.dll` by Henpemaz was a recommended FS addon, aimed at hand placement on terrain. Pre-Downpour and unobtainable, but the *existence* of a dedicated fix says hand anchoring was a known pain point for resized slugcats even then. Expect it to bite us.
+
+### DMS capability audit — RESOLVED 2026-07-19 (read from the installed DLL)
+DMS is installed locally; verdict from decompiling
+`workshop/content/312520/2948971756/newest/plugins/DressMySlugcat.dll`:
+
+| FS feature | DMS equivalent | Verdict |
+|---|---|---|
+| Ears (angle/length/width) | `DressMySlugcat.NoirEars` — ears as `TailSegment[][]`, `EarsFlip`, `LastHeadRotation`, atlas `atlases/Ears` | ✅ **has it** |
+| Tail (width/length/roundness) | `TailCustomizer` — roundness, custom shape, asym tail, `TailAtlas`/`TailElement` | ✅ **has it** (absorbed CustomTails) |
+| Body height / width / fatness | *nothing* — no width/height/fatness strings anywhere; only "Custom Tail Size" | ❌ **does NOT** |
+
+**Decision: the "self-contained, no DMS" call HOLDS**, for a better reason than before.
+1. The one thing we actually need — **the smaller body — is the one thing DMS cannot do.** Its
+   feature set is sprite replacement plus ears and tail, not proportions.
+2. DMS is a **player-facing customization tool**, not a library. Its public surface is
+   `FancyMenu`, `GalleryDialog`, `SaveManager`, `DMSOptions`, presets, "Wipe All Presets" —
+   there is no evident mod-facing API to ship a fixed appearance for a custom slugcat. Taking
+   the dependency would mean *players dress the Goblin themselves*, which is not shipping a
+   character. (Not 100% proven — no API was found, but absence of evidence. Re-check if we
+   ever seriously want the dependency.)
+3. Two mods both hooking `PlayerGraphics.DrawSprites` for the same player is exactly the
+   interference the DMS guide warns about.
+
+**But steal the approach.** DMS's ears are the proven design: **ears are `TailSegment` chains**
+— the same procedural physics as the tail — driven off head rotation, with their own atlas.
+That is how to build the Goblin's ears; FS's `Circle20` was the cruder ancestor. No need to
+invent a scheme.
+
+**Sprite-leaser indices** (DMS's own constants — *verify against `PlayerGraphics` before
+relying on these*, but they answer the checklist item below):
+
+| Index | Sprite |
+|---|---|
+| 0 | Body |
+| 1 | Hips |
+| 2 | Tail |
+| 3 | Head |
+| 4 | Legs |
+| 5 / 6 | Arm, Arm2 |
+| 7 / 8 | OnTopOfTerrainArm, OnTopOfTerrainArm2 |
+
+**Hook set DMS uses on `PlayerGraphics`** (a good map of what we'll need): `.ctor`,
+`InitiateSprites`, `AddToContainer`, `DrawSprites`, `ApplyPalette`, `Reset`, `Update`.
+
+### Templates — already on disk, no download needed
+`PLAN.md` previously said to grab DMS's `ModTemplate.zip`. It's already installed at
+`workshop/content/312520/2948971756/dressmyslugcat/` — both `template/` and
+`asymmetry template/`. Each part ships `.png` + `.txt`, where the `.txt` is
+**TexturePacker JSON (Hash)** despite the extension, e.g.:
+
+```json
+{"frames": {
+"TailTexture.png": {
+	"frame": {"x":2,"y":2,"w":150,"h":75},
+	"rotated": false, "trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":150,"h":75},
+	"sourceSize": {"w":150,"h":75}
+}}, "meta": { ... "image": "tail.png", "format": "RGBA8888", "size": {"w":154,"h":79} }}
+```
+
+Template sheet dimensions (2px padding, hence the +4):
+
+| Sheet | Size | Sheet | Size |
+|---|---|---|---|
+| `head.png` | 1008×240 | `arm.png` | 248×874 |
+| `legs.png` | 1762×49 | `face.png` | 242×202 |
+| `body.png` | 28×25 | `hips.png` | 32×38 |
+| `tail.png` | 154×79 (`TailTexture` 150×75) | | |
+
+Note the tail template is **150×75**, not the 128×64 the guide "recommends" — either works,
+it's a UV texture, but match whichever the `.txt` declares.
+
+**Recovering old FS/CustomTails art is viable.** The tail is a plain UV-mapped texture with no
+frame data, so an old tail `.png` from a pre-Downpour install is still usable as raw art — only
+the `.txt`'s declared dimensions need to agree with it. FS ears were procedural
+(`Circle20` + parameters), so there is no "ear file" to recover unless custom ear sprites were
+packed.
+
+### DMS-only — does NOT constrain us
+- The **asymmetric template system** (Front/Left/Right = 3 `.png` + 3 `.txt` per part, all required or it breaks) is a **DMS feature**, not vanilla. We get one atlas per part.
+- `metadata.json` per skin subfolder, the `dressmyslugcat/` folder layout, and author+skin ID naming.
+- Menu-reload visual glitches (colours reverting, parts vanishing) — a DMS menu bug.
+- "Can't add frames **using only DMS**" — true for us too, but for a different reason (code-side frame indexing).
+- Gourmand's forced body stretch, Artificer's scar drift, Spearmaster's detaching tail spots — other slugcats' hardcoded quirks, irrelevant here.
 
 ### Integration — self-contained (DECIDED, no DMS)
 Not using DMS. Register an `FAtlas` in the plugin, drop `png` + `txt` into `mod/atlases/`, assign via a `PlayerGraphics.DrawSprites` hook (replaces existing parts only). No external dependency, fully bundled — better for co-op robustness, and it's the same hook the limb re-anchoring needs. Still grab the DMS `ModTemplate.zip` for its labeled templates + `.txt` files (saves manual work even off-DMS). Mechanics documented on the "Custom Player Graphics (without DMS)" wiki page.
