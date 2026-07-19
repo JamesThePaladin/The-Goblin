@@ -1,5 +1,8 @@
 ﻿using System;
+using System.Reflection;
 using BepInEx;
+using BepInEx.Logging;
+using MonoMod.RuntimeDetour;
 using UnityEngine;
 using SlugBase.Features;
 using static SlugBase.Features.FeatureTypes;
@@ -23,6 +26,8 @@ namespace SlugTemplate
         // Add hooks
         public void OnEnable()
         {
+            _log = Logger;
+
             On.RainWorld.OnModsInit += Extras.WrapInit(LoadResources);
 
             // The Goblin is Jolly Co-op-only for now and has no campaign to "beat",
@@ -32,12 +37,88 @@ namespace SlugTemplate
             // without this he loads fine yet never appears as a selectable co-op player.
             On.SlugcatStats.SlugcatUnlocked += SlugcatStats_SlugcatUnlocked;
 
-            // Put your custom hooks here!
-            //On.Player.Jump += Player_Jump;
+            // Movement: borrow Rivulet's whole land agility kit (see PLAN.md Feature 1b).
+            HookRivuletAgility();
 
+            // Hoarding: don't let being small stop him carrying loot (PLAN.md Feature 1c).
+            On.Player.HeavyCarry += Player_HeavyCarry;
+        }
+
+        // Set from OnEnable so the static hook helpers can log. BepInEx writes to
+        // BepInEx/LogOutput.log (verified working once Doorstop injects — see PLAN.md).
+        private static ManualLogSource _log;
+
+        private static bool IsGoblin(Player player) =>
+            player?.SlugCatClass != null && player.SlugCatClass.value == GoblinName;
+
+        // Every one of Rivulet's ~40 movement branches — pole-skip/beam vaulting in Update,
+        // the slide timing in UpdateBodyMode, WallJump, Jump, and the matching animations —
+        // gates on the single `Player.isRivulet` property. Reporting true for the Goblin
+        // grants the entire kit at once, with her exact constants and no hand-tuning.
+        //
+        // This is the same mechanism the base game uses: Expedition's "unl-agility" unlock
+        // is literally the property's second branch, so it is built to be slugcat-agnostic.
+        //
+        // Audited for water leakage before adopting — her swimming power (swimBoostCost,
+        // swimBoostCooldown, lungsFac) lives in SlugcatStats keyed on slugcat NAME, so none
+        // of it can transfer. The only non-land branches are a drowning threshold in
+        // LungUpdate (a mild downside) and being able to grab while submerged on a beam
+        // (a bonus that suits a hoarder). Neither is worth suppressing.
+        //
+        // MonoMod's HookGen emits no delegates for property getters (7214 orig_* in
+        // HOOKS-Assembly-CSharp, zero named get_*), so there is no On.Player.get_isRivulet
+        // to subscribe to — the getter has to be detoured through RuntimeDetour instead.
+        private static void HookRivuletAgility()
+        {
+            MethodInfo getter = typeof(Player)
+                .GetProperty("isRivulet", BindingFlags.Public | BindingFlags.Instance)
+                ?.GetGetMethod();
+
+            if (getter == null)
+            {
+                _log?.LogError("Player.isRivulet getter not found — the Goblin's movement kit is OFF.");
+                return;
+            }
+
+            // Held in a static field so the detour isn't garbage collected.
+            _isRivuletHook = new Hook(getter, (Func<Func<Player, bool>, Player, bool>)Player_get_isRivulet);
+            _log?.LogInfo("Detoured Player.isRivulet — Goblin has Rivulet's agility kit.");
+        }
+
+        private static Hook _isRivuletHook;
+
+        private static bool Player_get_isRivulet(Func<Player, bool> orig, Player self)
+        {
+            // Per-player gate: only the Goblin is forced true, everyone else (including
+            // the actual Rivulet in the same co-op session) falls through untouched.
+            if (IsGoblin(self))
+                return true;
+
+            return orig(self);
+        }
+
+        // HeavyCarry's mass rule is relative to the carrier, so the Goblin's light `weight`
+        // makes MORE objects count as heavy for him than for Survivor. Worse, FreeHand()
+        // returns -1 while heavy-carrying, meaning he couldn't hold a second object at all —
+        // the opposite of a hoarder. Exempt him from the mass rule only; genuinely two-handed
+        // or draggable things (and other players) stay heavy so their animations still work.
+        private static bool Player_HeavyCarry(On.Player.orig_HeavyCarry orig, Player self, PhysicalObject obj)
+        {
+            if (obj == null || !IsGoblin(self))
+                return orig(self, obj);
+
+            if (obj is Player)
+                return orig(self, obj);
+
+            if (self.Grabability(obj) >= Player.ObjectGrabability.TwoHands)
+                return orig(self, obj);
+
+            return false;
         }
 
         // Report the Goblin as unlocked; defer to the game for every other slugcat.
+        // NOTE: this runs very hot (many calls per menu frame) — keep it allocation-free
+        // and never log from here.
         private static bool SlugcatStats_SlugcatUnlocked(On.SlugcatStats.orig_SlugcatUnlocked orig, SlugcatStats.Name i, RainWorld rainWorld)
         {
             if (i != null && i.value == GoblinName)

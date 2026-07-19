@@ -14,7 +14,7 @@ The repo was reviewed. It's a SlugTemplate clone; author id **`sanctus.thegoblin
 
 **All the value is in the JSON, and it's good.** Every feature key used is a confirmed **built-in** — nothing needs an extra dependency. Two of the three target features are already fully solved here:
 
-- **Baseline speed → DONE in JSON:** `walk_speed`, `climb_speed`, `tunnel_speed` all `[1.2, 1]`; `weight` `[0.8, 0.6]` (light); `lung_capacity` `[1.2, 1]`; `loudness` `[0.8, 0.6]` (quiet, fits a small sneak). *(This is generic faster movement only — NOT the full Rivulet movement kit, which is a separate code feature and is not done.)*
+- **Baseline speed → DONE in JSON, retuned 2026-07-19:** `walk_speed` `[1.75, 1]`, `climb_speed` `[1.8, 1]`, `tunnel_speed` `[1.6, 1]` — Rivulet's actual values from the decompile (they were `[1.2, 1]`, i.e. nowhere near her); `weight` `[0.8, 0.6]` (light); `lung_capacity` `[1.2, 1]`; `loudness` `[0.8, 0.6]` (quiet, fits a small sneak). *(This is on-land pace parity only — NOT the jump kit, which is a separate code feature and is not done. See Feature 1a/1b.)*
 - **Friendly with scavengers → DONE in JSON** (mechanism resolved): the built-in `alignments` feature handles it. **Design choice made:** drop `locked` so the friendliness is *losable* — start maxed but let it drop if the Goblin wrongs them ("gotta respect the scavs; don't want to get caught lackin'"). Corrected value: `{ "like": 1, "strength": 1 }` — starts fully friendly on a new save, then normal reputation dynamics apply. Still reinforced by `maul_blacklist: ["Scavenger"]` and the `diet` stun-on-eat override.
 - Plus extras already dialed in: `throw_skill: [2,1]` (Hunter-tier), `back_spear`, `can_maul` + `maul_damage: 1.5`, `karma: 2`, `karma_cap: 6`, `auto_grab_batflies`, color `00FFFF` (cyan), `diet` base `Red` (omnivore-tuned via corpses/plants `1.0`).
 
@@ -154,29 +154,138 @@ Expect the raw output to look rough (lost local names → `num`, `num2`, `flag`,
 
 ## Feature 1 — Movement
 
-### 1a. Baseline speed stats ✅ (done in salvaged JSON)
-- Already set: `walk_speed`, `climb_speed`, `tunnel_speed` = `[1.2, 1]`, `weight` `[0.8, 0.6]`. Built-in, valid. This is generic "faster," and it's complete.
+### 1a. Baseline speed stats ✅ (retuned 2026-07-19 to Rivulet's real numbers)
+Previously `[1.2, 1]` across the board, which was tuned against nothing and left him
+**far** behind Rivulet. Corrected against her actual values, read out of
+`SlugcatStats..ctor` in the decompile:
 
-### 1b. Keep-up movement — Rivulet's pace + jump kit (C# hooks) ❌
-**The design goal:** the Goblin keeps up with Rivulet in co-op without being a clone. But this is **hook work, not JSON tuning** — jump height, pounce, and the side-wall wall-jump are **not** SlugBase JSON features. The base speed multipliers (already in JSON) are only part of it.
+| Stat (game field) | JSON key | Rivulet | Goblin (was → now) |
+|---|---|---|---|
+| `runspeedFac` | `walk_speed` | **1.75** | 1.2 → **1.75** |
+| `poleClimbSpeedFac` | `climb_speed` | **1.8** | 1.2 → **1.8** |
+| `corridorClimbSpeedFac` | `tunnel_speed` | **1.6** | 1.2 → **1.6** |
+| `bodyWeightFac` | `weight` | 0.95 | 0.8 (unchanged — lighter on purpose) |
+| `throwingSkill` | `throw_skill` | 1 | 2 (Goblin better, keep) |
+| `lungsFac` | `lung_capacity` | 0.15 | 1.2 (water, irrelevant) |
 
-**The pattern (per the template's own example):** the commented-out `super_jump` in `Plugin.cs` is the model — `public static readonly PlayerFeature<float> SuperJump = PlayerFloat("thegoblin/super_jump")`, added to the slugcat JSON, applied by hooking `Player.Jump` and scaling `jumpBoost` when `SuperJump.TryGet(...)` succeeds. Jump height is done exactly this way.
+Also in her block but **water, excluded**: `swimBoostCost` 0.025, `swimBoostCooldown` 10.
+These are keyed on slugcat *name* in `SlugcatStats`, so they can never leak to the
+Goblin regardless of what we hook.
 
-**Build order within movement (jump feeds the rest):**
-1. **Jump height** first — a `Player.Jump` hook to reach Rivulet's height. Uncomment/adapt the `super_jump` example as the starting point.
-2. **Pounce** and **side-wall wall-jump** build on that jump power — implement after the jump is right, since they inherit from it.
-3. Tune against Rivulet's real numbers (see decompile below).
+### 1b. Keep-up movement — Rivulet's jump kit ❌
+**The design goal:** the Goblin keeps up with Rivulet in co-op without being a clone.
+Her jump constants are hardcoded in `Player`, not JSON — but **not** as scattered
+per-ability branches the way this plan originally assumed.
 
-**Decompile purpose (revised):** Find Usages on the Rivulet enum (`MoreSlugcatsEnums.SlugcatStatsName.Rivulet`) to read **both** her actual jump/movement *values* **and** the *code paths* — so the Goblin's hooks can match her feel rather than guess. (Last turn I understated this as "just read values"; it's read values **and** replicate the mechanics via hooks.)
+**Key discovery (2026-07-19): the whole kit hangs off one property.** All ~40 of her
+movement branches — in `Update`, `UpdateAnimation`, `UpdateBodyMode`, `MovementUpdate`,
+`WallJump`, `Jump`, `GrabUpdate`, `LungUpdate` — gate on `Player.isRivulet`:
 
-**Note on Rivulet's exact kit:** confirm what her movement actually comprises from the Find-Usages list rather than assuming — the branches the game gates on `Rivulet` are the authoritative inventory of jump/pounce/wall-jump/etc. Water branches stay excluded.
+```csharp
+public bool isRivulet {
+  get {
+    if (ModManager.MSC && SlugCatClass == MoreSlugcatsEnums.SlugcatStatsName.Rivulet) return true;
+    if (ModManager.MSC && ModManager.Expedition && Custom.rainWorld.ExpeditionMode)
+      return ExpeditionGame.activeUnlocks.Contains("unl-agility");
+    return false;
+  }
+}
+```
+
+That second branch is Expedition's **"Agility" unlock** — the base game already grafts her
+entire movement kit onto arbitrary slugcats through this exact property, so it is designed
+to be identity-independent. Hooking `On.Player.get_isRivulet` to return true for the Goblin
+gets the whole land kit in **one hook**, with no hand-tuning and exact feel parity.
+
+Her jump constants, for reference / if we hand-roll instead:
+
+| Jump | Rivulet | Default | Slugpup |
+|---|---|---|---|
+| Corridor-exit `jumpBoost` | **14** | 8 | 4 |
+| Vertical-pole `vel.y` (chunk 0 / 1) | **9 / 8** | 8 / 7 | 7 / 6 |
+| Vertical-pole `vel.x` (chunk 0 / 1) | **9 / 7** | 6 / 5 | 5 / 4.5 |
+
+Impulses are raw constants; the only multiplier is `Mathf.Lerp(1f, 1.15f, Adrenaline)`,
+so body weight does **not** scale them.
+
+**GATE CLEARED — audit done 2026-07-19. Verdict: hook it, no suppression needed.**
+Every `isRivulet` call site, classified:
+
+| Site | Count | What it does | Land? |
+|---|---|---|---|
+| `Update` | 7 | Pole-skip / beam vaulting (below) | ✅ want it |
+| `UpdateAnimation` | 16 | Animations for the above | ✅ needed |
+| `Jump` | 7 | Jump constants (table above) | ✅ want it |
+| `WallJump` | 4 | Wall-jump constants | ✅ want it |
+| `UpdateBodyMode` | 1 | Slide timing — 10 vs 5 | ✅ want it |
+| `MovementUpdate` | 1 | Threshold 8 vs 16 | ✅ want it |
+| `GrabUpdate` | 1 | Can grab while submerged on a beam | ~ bonus, suits a hoarder |
+| `LungUpdate` | 1 | Drown threshold 0.0 vs -0.3 | ~ water, mild *downside* |
+
+Her pole-skip / beam-vault chain, from the `Update` branches — this is the fluid part:
+
+| Behaviour | Rivulet | Default |
+|---|---|---|
+| Pole-skip launch `vel.y` (chunk 0 / 1) | **7 / 6** | 4.5 / 3.5 |
+| `jumpBoost` off a horizontal pole | **7** | 6 |
+| `poleSkipPenalty` after a skip | **3** | 6 |
+| Penalty after a *failed* skip | **6** flat | `Min(30, penalty + 12)` |
+
+**There is essentially no water contamination**: her actual swimming power (`swimBoostCost`,
+`swimBoostCooldown`, `lungsFac`) lives in `SlugcatStats` keyed on slugcat *name*, so it can
+never transfer through this property. `isRivulet` is almost purely the agility kit — which is
+exactly why Expedition reuses it as the Agility unlock.
+
+**Implementation gotcha:** MonoMod's HookGen emits **no delegates for property getters** —
+7214 `orig_*` types in `HOOKS-Assembly-CSharp.dll`, zero named `get_*`. So
+`On.Player.get_isRivulet` does not exist. The getter must be detoured via
+`MonoMod.RuntimeDetour.Hook` against the reflected `MethodInfo`, with the `Hook` kept in a
+static field so it isn't collected. Done in `Plugin.cs`.
+
+### 1c. No heavy-carry penalty (design call, 2026-07-19) ❌
+**Intent:** the Goblin hauls loot all day — grabbing things must not cripple him.
+
+```csharp
+public bool HeavyCarry(PhysicalObject obj) {
+    if (Grabability(obj) == ObjectGrabability.Drag)     return true;
+    if (Grabability(obj) == ObjectGrabability.TwoHands) return true;
+    if (obj.TotalMass > this.TotalMass * 0.6f)          return true;   // ← the problem
+    if (ModManager.CoopAvailable && obj is Player p)    return !p.isSlugpup;
+    return false;
+}
+```
+
+The mass rule is **relative to the carrier**, and `TotalMass` derives from the body chunks'
+mass, seeded from `bodyWeightFac` — i.e. from the `weight` JSON key alone. At `weight` 0.8
+the Goblin's threshold is `0.8 × 0.6 = 0.48` vs Survivor's 0.6 — about **20% more objects
+count as "heavy" for him**. The real cost isn't speed: `FreeHand()` returns `-1` while
+heavy-carrying, so **he cannot hold a second object at all** — directly hostile to a hoarder.
+
+*Not* coupled to Feature 3: the sprite atlas is `PlayerGraphics`-only and never feeds
+`TotalMass`. He can be drawn tiny and still weigh whatever `weight` says — visual size and
+carry capacity are independent knobs.
+
+Fix: hook `Player.HeavyCarry`, exempt him from the mass rule only, leaving `TwoHands`/`Drag`
+objects and other players genuinely heavy so animations don't break.
 
 **Decompiled-code checklist:**
-- [ ] Find Usages on the Rivulet `SlugcatStats.Name` value → full movement branch list + her jump/speed constants.
-- [ ] `Player.Jump` — the hook surface for jump height (mirror the `super_jump` pattern).
-- [ ] Pounce handling and the existing 2D side-wall wall-jump — how they read jump power, so the Goblin's version stays consistent.
-- [ ] Flag water/swim branches as **excluded**.
+- [x] Find Usages on the Rivulet `SlugcatStats.Name` value → stat constants (1a) + branch inventory (1b).
+- [x] `Player.Jump` — read; her constants tabulated above.
+- [x] `Player.HeavyCarry` / `Grabability` / `FreeHand` — read; see 1c.
+- [x] Audit `isRivulet` call sites for water leakage — cleared, see table.
+- [x] `Player.WallJump` — 4 branches; inherited wholesale via the property, no hand-rolling needed.
+- [x] Flag water/swim branches as **excluded** — they are, structurally (name-keyed stats).
+- [x] Detour confirmed live in-game 2026-07-19 (`Detoured Player.isRivulet` in the BepInEx log, no exceptions); jump/wall-jump/pole feel confirmed good by Sanctus.
+- [ ] **Side-by-side pace check against an actual Rivulet in co-op** — the bar `CLAUDE.md` sets for calling movement done.
 - [ ] Sequence vs Feature 4 wall-walk (both touch `Player` movement).
+
+**Status:** `Plugin.cs` detours `Player.isRivulet` (RuntimeDetour, per-player gated on
+`SlugCatClass`) and hooks `On.Player.HeavyCarry`. Working in-game.
+
+**Workflow gotcha that cost a debugging round:** SlugBase hot-reloads character JSON, the
+plugin DLL does **not** — BepInEx loads assemblies once at startup. After any rebuild the
+game needs a full restart, or you're testing the old DLL while the JSON changes appear to
+work. The symptom is exactly "the stat changes took but the hooks didn't."
 
 ---
 
@@ -247,7 +356,35 @@ The player doesn't natively free-climb the way lizards grip terrain, and lizard 
 ## Preflight — verify at the machine before investing
 
 - [x] **Salvage `JamesThePaladin/The-Goblin`** — done (see salvage section). JSON recovered + corrected; code was untouched template.
-- [ ] **Apply the two JSON fixes** — `auto_grab_batflies` → boolean `true`; fix or remove the ascended/ghost scene.
+- [x] **Apply the two JSON fixes** — `auto_grab_batflies` is boolean `true`; the ghost scene is removed (below).
+
+**Select-menu scene — REMOVED 2026-07-19, art preserved.** `mod/slugbase/scenes/slugcat_goblin.json`
+was deleted: it was orphaned once `select_menu_scene` came out of `the_goblin.json`, and SlugBase
+was loading it every launch for nothing. **The art is intentionally kept** at
+`mod/scenes/slugcat - goblin/` (Background, Slugcat, Grass 1–3). Revive this verbatim if the
+Goblin ever gets a campaign/story — the positions are hand-tuned, so don't redo them:
+
+```json
+{
+	"id": "Slugcat_Goblin",
+	"scene_folder": "scenes/slugcat - goblin",
+	"images": [
+		{ "name": "Background", "pos": [492, 297], "depth": 3.7, "shader": "Basic" },
+		{ "name": "Slugcat",    "pos": [605, 427], "depth": 2.8, "shader": "Basic" },
+		{ "name": "Grass 3",    "pos": [602, 264], "depth": 2.2, "shader": "Basic" },
+		{ "name": "Grass 2",    "pos": [446, 283], "depth": 2.0, "shader": "Basic" },
+		{ "name": "Grass 1",    "pos": [515, 265], "depth": 1.8, "shader": "Basic" }
+	],
+	"idle_depths": [ 2.8 ],
+	"glow_pos": [688, 484],
+	"mark_pos": [689, 583],
+	"select_menu_pos": [0, 0],
+	"slugcat_depth": 2.8
+}
+```
+
+To re-enable: restore that file and add `"select_menu_scene": "Slugcat_Goblin"` back to
+`the_goblin.json`'s features.
 - [ ] **SlugBase stability post-1.5 / The Watcher.** The DLC + 1.5 update reportedly broke some SlugBase custom-feature and arena functionality around late 2025. Confirm the current SlugBase release is stable against the installed game version.
 - [ ] **Jolly Co-op state.** As of the 1.5 update, Jolly Co-op is officially supported in The Watcher campaign and retroactively across all five Downpour campaigns (supersedes the buggy community "Jolly Co-op for the Watcher" mod). Confirm current status and that a **custom SlugBase slugcat** works in co-op (multi-instance / per-player feature gating).
 - [ ] **Worldstate/timeline — DEFERRED while co-op-only.** Co-op players run in the *host's* campaign world, so the Goblin's own `world_state`/`start_room` don't drive anything yet. (When he later becomes a standalone campaign character: inherit Survivor/White baseline; avoid Saint/frozen and Rivulet/flooded; set explicitly. Watcher-era note: timelines are distinct from slugcats and custom ones don't inherit spawns/connections as cleanly.)
