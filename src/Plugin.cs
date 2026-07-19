@@ -18,9 +18,14 @@ namespace SlugTemplate
         // ExtEnum identity is the id string, so we match on that.
         public const string GoblinName = "Goblin";
 
-        //public static readonly PlayerFeature<float> SuperJump = PlayerFloat("thegoblin/super_jump");
         //public static readonly PlayerFeature<bool> ExplodeOnDeath = PlayerBool("thegoblin/explode_on_death");
         //public static readonly GameFeature<float> MeanLizards = GameFloat("thegoblin/mean_lizards");
+
+        // EXPERIMENT (PLAN.md Feature 3): uniform scale on the Goblin's body chunks.
+        // Lives in the_goblin.json so it can be retuned WITHOUT a rebuild — SlugBase
+        // hot-reloads character JSON, and the value is read fresh in Player.ctor, so a
+        // death/respawn picks up an edit. 1.0 = vanilla, no-op.
+        public static readonly PlayerFeature<float> BodyScale = PlayerFloat("thegoblin/body_scale");
 
 
         // Add hooks
@@ -42,6 +47,10 @@ namespace SlugTemplate
 
             // Hoarding: don't let being small stop him carrying loot (PLAN.md Feature 1c).
             On.Player.HeavyCarry += Player_HeavyCarry;
+
+            // EXPERIMENT — remove once the body-scale question is settled.
+            On.Player.ctor += Player_ctor_BodyScale;
+            On.Player.Update += Player_Update_ScaleDiagnostics;
         }
 
         // Set from OnEnable so the static hook helpers can log. BepInEx writes to
@@ -114,6 +123,104 @@ namespace SlugTemplate
                 return orig(self, obj);
 
             return false;
+        }
+
+        // ------------------------------------------------------------------
+        // EXPERIMENT: body scale. Throwaway — delete once we've decided between
+        // "visual-only" and "physical rad change" (PLAN.md Feature 3).
+        // ------------------------------------------------------------------
+
+        // Vanilla player geometry, from Player..ctor:
+        //     bodyChunks[0] = rad 9      (hands anchor to this one)
+        //     bodyChunks[1] = rad 8
+        //     connection distance 17     (== 9 + 8, so the chunks sit exactly touching)
+        // Scaling all three by the same factor shrinks him without distorting his
+        // proportions. Chunk mass is deliberately NOT touched — that's the separate
+        // `weight` knob, and conflating the two would muddy what we're measuring.
+        private static void Player_ctor_BodyScale(On.Player.orig_ctor orig, Player self, AbstractCreature abstractCreature, World world)
+        {
+            orig(self, abstractCreature, world);
+
+            if (!BodyScale.TryGet(self, out float scale) || scale <= 0f || Math.Abs(scale - 1f) < 0.001f)
+                return;
+
+            foreach (var chunk in self.bodyChunks)
+                chunk.rad *= scale;
+
+            foreach (var connection in self.bodyChunkConnections)
+                connection.distance *= scale;
+
+            // Also dump the stats object the ctor actually saw. TotalMass came back as the
+            // vanilla 0.7 despite "weight": [0.8, 0.6], which means bodyWeightFac was 1.0 here.
+            // runspeedFac is the tell: 1.75 means these ARE the Goblin's stats and only weight
+            // is misbehaving; 1.0 means Player.slugcatStats resolved to the wrong object
+            // entirely (it reads session.characterStatsJollyplayer[n] when populated and falls
+            // back to the session-wide characterStats otherwise) — which would be co-op-critical.
+            var stats = self.slugcatStats;
+
+            // `weight` is not landing: bodyWeightFac reads 1.0 despite "weight": [0.8, 0.6],
+            // while walk_speed from the same JSON applies fine. SlugBase registers it as
+            // PlayerFloats("weight", 1, 2) — identical in shape to the speed features — and
+            // sets bodyWeightFac = ApplyStarve(weight, Mathf.Min(weight[0], 0.9f), ...), which
+            // should give 0.8. So the suspicion is TryGet returning false. Ask it directly.
+            bool gotWeight = PlayerFeatures.WeightMul.TryGet(self, out float[] weightValues);
+            _log?.LogInfo($"[bodyscale] WeightMul.TryGet={gotWeight} " +
+                          $"values={(weightValues == null ? "null" : string.Join(", ", weightValues))}");
+            _log?.LogInfo($"[bodyscale] applied {scale:0.###} -> rad0={self.bodyChunks[0].rad:0.##} " +
+                          $"rad1={self.bodyChunks[1].rad:0.##} dist={self.bodyChunkConnections[0].distance:0.##} " +
+                          $"mass={self.TotalMass:0.###} (vanilla: 9 / 8 / 17) | " +
+                          $"stats: bodyWeightFac={stats?.bodyWeightFac ?? -1f:0.###} " +
+                          $"runspeedFac={stats?.runspeedFac ?? -1f:0.###} " +
+                          $"player#{self.playerState?.playerNumber ?? -1}");
+        }
+
+        private static int _diagTicks;
+
+        // THE measurement that decides the approach.
+        //
+        // Limbs are simulated, not drawn relative to the body sprite: hands anchor to
+        // bodyChunks[0] and legs to the hips chunk. So the question is whether their rest
+        // distance is derived from the chunk's rad or from hardcoded constants.
+        //
+        // Read `reach/rad` across several body_scale values:
+        //   - ratio STAYS ~constant  -> limbs follow rad for free. The physical approach
+        //                               needs no DrawSprites re-anchoring at all.
+        //   - ratio GROWS as scale shrinks -> limb rest distance is absolute, and we must
+        //                               offset the arm/leg sprites ourselves.
+        private static void Player_Update_ScaleDiagnostics(On.Player.orig_Update orig, Player self, bool eu)
+        {
+            orig(self, eu);
+
+            if (!IsGoblin(self) || self.room == null)
+                return;
+
+            // ~once per second at 40 ticks/s; this runs every frame otherwise and we already
+            // learned the hard way what per-frame logging costs.
+            if (++_diagTicks % 40 != 0)
+                return;
+
+            if (!(self.graphicsModule is PlayerGraphics graphics) || graphics.hands == null)
+                return;
+
+            var bodyChunk = self.bodyChunks[0];
+            var hipsChunk = self.bodyChunks[1];
+
+            string handInfo = "";
+            for (int i = 0; i < graphics.hands.Length; i++)
+            {
+                if (graphics.hands[i] == null) continue;
+                float reach = Vector2.Distance(graphics.hands[i].pos, bodyChunk.pos);
+                handInfo += $" hand{i}: reach={reach:0.##} reach/rad={reach / bodyChunk.rad:0.###}";
+            }
+
+            string legInfo = "";
+            if (graphics.legs != null)
+            {
+                float legReach = Vector2.Distance(graphics.legs.pos, hipsChunk.pos);
+                legInfo = $" legs: reach={legReach:0.##} reach/rad={legReach / hipsChunk.rad:0.###}";
+            }
+
+            _log?.LogInfo($"[bodyscale] rad0={bodyChunk.rad:0.##} rad1={hipsChunk.rad:0.##}{handInfo}{legInfo}");
         }
 
         // Report the Goblin as unlocked; defer to the game for every other slugcat.

@@ -9,21 +9,22 @@
 			{ "name": "Eyes", "story": "000000" }
 		],
 		"auto_grab_batflies": true,
-		"weight": [0.8, 0.6],
+		"weight": [0.4, 0.2],
+		"thegoblin/body_scale": 0.2,
 		"tunnel_speed": [1.6, 1],
 		"climb_speed": [1.8, 1],
 		"walk_speed": [1.75, 1],
 		"crouch_stealth": [1.2, 1],
 		"throw_skill": [2, 1],
 		"lung_capacity": [1.2, 1],
-		"loudness": [0.8, 0.6],
+		"loudness": [0.4, 0.2],
 		"alignments": {
 			"Scavengers": { "like": 1, "strength": 1 }
 		},
 		"diet": {
 			"base": "Red",
 			"corpses": 1.0,
-			"plants": 1.0,
+			"plants": 0.2,
 			"overrides": { "Scavenger": -1 }
 		},
 		"back_spear": true,

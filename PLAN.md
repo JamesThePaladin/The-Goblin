@@ -256,10 +256,26 @@ public bool HeavyCarry(PhysicalObject obj) {
 ```
 
 The mass rule is **relative to the carrier**, and `TotalMass` derives from the body chunks'
-mass, seeded from `bodyWeightFac` — i.e. from the `weight` JSON key alone. At `weight` 0.8
-the Goblin's threshold is `0.8 × 0.6 = 0.48` vs Survivor's 0.6 — about **20% more objects
-count as "heavy" for him**. The real cost isn't speed: `FreeHand()` returns `-1` while
-heavy-carrying, so **he cannot hold a second object at all** — directly hostile to a hoarder.
+mass, seeded from `bodyWeightFac` — i.e. from the `weight` JSON key alone.
+
+**⚠ CORRECTION 2026-07-19 — the original rationale for this hook was wrong.** It was argued
+that `weight: 0.8` put his threshold at `0.8 × 0.6 = 0.48` vs Survivor's 0.6, so ~20% more
+objects counted as heavy for him. **In-game measurement says `bodyWeightFac` is actually 1.0**
+(logged at `Player..ctor`: `mass=0.7`, the vanilla value) — see the open bug below. So he was
+never mass-disadvantaged; his threshold is the vanilla 0.6.
+
+The hook is still **wanted**, but on design grounds rather than compensation: a hoarder should
+haul loot freely, and `FreeHand()` returns `-1` while heavy-carrying, meaning he cannot hold a
+second object at all. That's the real cost, and it's hostile to the character regardless of
+mass. Keep the hook; discard the "he's penalised for being light" justification.
+
+**🐞 OPEN BUG — `weight` is not being applied.** Same JSON, same SlugBase hook, same character:
+`walk_speed` lands (`runspeedFac=1.75`) but `weight` does not (`bodyWeightFac=1.0`). SlugBase
+registers it as `PlayerFloats("weight", 1, 2)` — identical in shape to the speed features — and
+applies `bodyWeightFac = ApplyStarve(weight, Mathf.Min(weight[0], 0.9f), ...)`, which should
+yield 0.8. Suspicion is `WeightMul.TryGet` returning false; a direct probe is now logged from
+`Player..ctor`. Note this also means **the Goblin currently weighs exactly as much as a
+Survivor**, which affects jump arcs and momentum — relevant to judging Rivulet parity.
 
 *Not* coupled to Feature 3: the sprite atlas is `PlayerGraphics`-only and never feeds
 `TotalMass`. He can be drawn tiny and still weigh whatever `weight` says — visual size and
@@ -305,9 +321,41 @@ work. The symptom is exactly "the stat changes took but the hooks didn't."
 
 ## Feature 3 — Smaller (art + PlayerGraphics code)
 
+**Design reference: a fennec fox.** The Goblin's size and silhouette came from picking the
+fennec ears in Fancy Slugcats. That's the look to aim at — and it has a concrete consequence
+for the scaling work: **a fennec is a small body with *disproportionately large* ears.** So
+the ears must NOT inherit `body_scale`; if anything they scale the other way. Keep ear size an
+independent parameter from body size (FS had exactly that — separate ear angle/length/width
+sliders). Same logic for the head: fennec heads read large relative to the body.
+
 Custom **sprite atlas** (smaller body) **plus `PlayerGraphics` work** to fix limb placement. Not purely art — see below. Reference guide: *Dress My Slugcat: Custom Slugcat Tutorial* (Teno Al Mehri et al.). Starting the sprite from scratch (the old base came from a since-lost body-size-editing mod).
 
-### The "arms out the cheeks" problem — it's procedural, and smaller RE-triggers it
+### ✅ RESOLVED 2026-07-19 — scaling the CHUNKS moves the limbs for free
+**Tested in-game down to `body_scale` 0.2: no limb misplacement at all.** The section below
+was written on the assumption that we'd shrink the *sprite*. We don't — we scale
+`bodyChunks[].rad` and the connection distance, and because hands anchor to `bodyChunks[0]`
+and legs to the hips chunk, the limb simulation follows automatically. **No `DrawSprites`
+re-anchoring is needed.** What this plan called "the real work of this feature" does not exist.
+
+Consequences:
+- **Art can be drawn at vanilla template dimensions.** The system does the shrinking, so the
+  sprite sheets stay the standard sizes and every frame name/anchor rule still applies as-is.
+- The remaining art job is **proportion, not scale** — at 0.2 he reads "chunky" because the
+  vertical squash follows the shortened chunk distance while sprite *width* stays native.
+  Fix by drawing him thinner, not smaller.
+- Sanctus's target size is **0.2** (rad 1.8 / 1.6, distance 3.4).
+
+**Two open artifacts at 0.2:**
+- [ ] **Breathing animation looks wrong.** `PlayerGraphics.breath` drives a sprite offset with
+  an absolute amplitude, so at 0.2 it's proportionally ~5× too large. Likely fix: scale the
+  breath contribution, or clamp it, in a `DrawSprites` hook. (`breath` field at
+  `PlayerGraphics`; written in `Update`, consumed in `DrawSprites`.)
+- [ ] **Gameplay side effects of a 0.2 hitbox unverified** — he can presumably fit through gaps
+  no other slugcat can. May be desirable for a goblin; must be a decision, not an accident.
+
+### (historical) The "arms out the cheeks" problem — it's procedural, and smaller RE-triggers it
+*Superseded by the section above — kept because the mechanism analysis is still accurate and
+would apply if we ever scaled sprites instead of chunks.*
 Correction to an earlier assumption: drawing smaller does **not** sidestep the anchor problem — it **re-causes** it, inversely. The arms (hands) and legs are **not positioned by the sprite**; they're placed **procedurally in `PlayerGraphics.DrawSprites`** relative to the body chunks. Shrink the body art and the limb attachment points *don't* move with it, so hands reach from where a full-size body would be → arms appear to emerge from the cheeks.
 
 So the fix is code, and it lives in the **same `PlayerGraphics.DrawSprites` hook** used to assign the self-contained atlas (below): offset/re-anchor the hand and leg sprite positions to match the smaller body. Two-birds: atlas assignment and limb re-anchoring are one hook.
@@ -487,10 +535,82 @@ packed.
 ### Integration — self-contained (DECIDED, no DMS)
 Not using DMS. Register an `FAtlas` in the plugin, drop `png` + `txt` into `mod/atlases/`, assign via a `PlayerGraphics.DrawSprites` hook (replaces existing parts only). No external dependency, fully bundled — better for co-op robustness, and it's the same hook the limb re-anchoring needs. Still grab the DMS `ModTemplate.zip` for its labeled templates + `.txt` files (saves manual work even off-DMS). Mechanics documented on the "Custom Player Graphics (without DMS)" wiki page.
 
-### Decompiled-code checklist
-- [ ] `PlayerGraphics.DrawSprites` — how arm (hand) and leg sprites are positioned relative to body chunks; where to offset them for a smaller body. **This is the real work of this feature.**
-- [ ] Confirm sprite-leaser indices for the hand/leg sprites so the offsets target the right ones.
-- [ ] `FAtlas` registration pattern (from the wiki page, not the decompile).
+### Decompile results — DONE 2026-07-19
+
+**Sprite-leaser index map** (read from `PlayerGraphics.InitiateSprites`; DMS's constants
+verified correct):
+
+| Index | Sprite | Notes |
+|---|---|---|
+| 0 | `BodyA` | `anchorY = 0.7894737`; **`if (RenderAsPup) scaleY = 0.5`** |
+| 1 | `HipsA` | |
+| 2 | Tail | `TriangleMesh`, 13 triangles, `Futile_White` |
+| 3 | `HeadA0` / `HeadB0` | |
+| 4 | `LegsA0` | has its own `anchorY` |
+| 5, 6 | `PlayerArm0` ×2 | `anchorX` set; sprite 5 also gets a `scaleY` |
+| 7, 8 | `OnTopOfTerrainHand` ×2 | |
+| 9 | `FaceA0` | |
+| 10 | `Futile_White` | |
+| 11 | `pixel` | |
+
+**How arm sprites get positioned** — this is the mechanism behind "arms out the cheeks":
+
+```csharp
+// PlayerGraphics.DrawSprites, per hand i
+Vector2 handPos = Vector2.Lerp(hands[i].lastPos, hands[i].pos, timeStacker);
+if (hands[i].mode != Limb.Mode.Retracted) {
+    sLeaser.sprites[5 + i].x = handPos.x - camPos.x;
+    sLeaser.sprites[5 + i].y = handPos.y - camPos.y;
+}
+```
+
+The arm sprite is drawn **at the simulated hand position**, and is not derived from the body
+sprite in any way. `hands` are `SlugcatHand` physics limbs built in the `PlayerGraphics` ctor:
+
+```csharp
+hands[i] = new SlugcatHand(this, owner.bodyChunks[0], i, 3f, 0.8f, 1f);
+```
+
+— i.e. **anchored to `bodyChunks[0]`**. So shrinking the drawn body moves nothing; the hands
+keep resting where a full-size body's chunk says they should. Legs are the same idea via
+`legs` (`GenericBodyPart`).
+
+**⭐ The key discovery — three INDEPENDENT knobs.** From `Player..ctor`:
+
+```csharp
+float mass = 0.7f * slugcatStats.bodyWeightFac;
+bodyChunks[0] = new BodyChunk(this, 0, default, 9f, mass / 2f);   // rad 9
+bodyChunks[1] = new BodyChunk(this, 1, default, 8f, mass / 2f);   // rad 8
+```
+
+| Knob | Set by | Controls |
+|---|---|---|
+| **Sprite art / scale** | our atlas + `DrawSprites` | purely what you see |
+| **Chunk `rad`** (9 and 8) | **hardcoded — ignores `bodyWeightFac`** | physical size, collision, gap-fitting, **and where limbs anchor** |
+| **Chunk mass** | `0.7 × bodyWeightFac` (JSON `weight`) | momentum, and the `HeavyCarry` threshold |
+
+So the Goblin today is **lighter but exactly the same physical size as every other slugcat** —
+`weight: 0.8` changed only his mass. Nothing in SlugBase JSON touches `rad`.
+
+**Two viable strategies for "smaller":**
+1. **Visual-only** — smaller art + offset `sprites[5..8]` in a `DrawSprites` hook. The game
+   itself does something like this: `RenderAsPup` just sets the body sprite's `scaleY = 0.5`.
+   Cheap and physics-safe, but the hand *simulation* is untouched, so he'd still reach and grab
+   at full-size distances; the offset is cosmetic and can desync from what he can actually touch.
+2. **Physical** — hook `Player.ctor` and reduce `rad` from 9/8. Limbs then follow **for free**,
+   because they anchor to the chunk. But it changes collision: he'd fit through gaps no other
+   slugcat fits through, which is a gameplay change (possibly a *desirable* one for a goblin —
+   but it must be a decision, not an accident).
+
+Decide between these before drawing anything, since option 2 changes what "smaller" means for
+the art. Prototype cheaply by hooking `Player.ctor` and tweaking `rad` with the *vanilla*
+sprite — the distortion will show exactly how far the limbs move.
+
+**Still open:**
+- [ ] Decide visual-only vs physical `rad` change (above).
+- [ ] `legs` / `GenericBodyPart` — confirm leg anchoring mirrors the hands before assuming it.
+- [ ] `FAtlas` registration pattern (wiki page, not the decompile).
+- [ ] Check whether `RenderAsPup`'s `scaleY = 0.5` is reusable/overridable for our own scaling.
 
 ---
 
