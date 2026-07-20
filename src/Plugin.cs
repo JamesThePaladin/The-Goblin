@@ -45,6 +45,9 @@ namespace SlugTemplate
             // Movement: borrow Rivulet's whole land agility kit (see PLAN.md Feature 1b).
             HookRivuletAgility();
 
+            // Wall-walking, step 1: gravity + terrain gating (PLAN.md Feature 4).
+            GoblinWallWalk.Apply();
+
             // Custom tail texture (PLAN.md Feature 3).
             GoblinTail.Apply();
 
