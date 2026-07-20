@@ -950,6 +950,28 @@ settled, and it interacts with the (unstarted) custom head sprites: `HeadA` fram
 0–3 idle, 4–5 turning, 6–7 crawl turn, 8–17 static down, so the *crawl turn* frames already
 exist in the vanilla sheet and may be usable directly.
 
+### ✅ Four-point contact — REJECTED 2026-07-19. Use animation states instead.
+Sanctus: four-point contact "involves too much that the Slugcat was not designed with in mind."
+Agreed — it would mean building leg limbs the rig doesn't have (see limitation below).
+
+**The agreed substitute, and it's a better fit:** drive the *existing* animation states while
+wall-crawling rather than inventing new limb rigging.
+- **Crawling horizontally** → `Player.AnimationIndex.DownOnFours` (the on-all-fours crawl).
+  `LedgeCrawl` and `CrawlTurn` may also be useful for transitions.
+- **Moving vertically** → have him "stand up", i.e. `AnimationIndex.StandUp`, so he reads as
+  climbing rather than crawling sideways.
+
+Available states (from `Player.AnimationIndex`), for reference when wiring this up:
+`AntlerClimb, BeamTip, BellySlide, ClimbOnBeam, CorridorTurn, CrawlTurn, Dead, DeepSwim,
+DownOnFours, Flip, GetUpOnBeam, GetUpToBeamTip, GrapplingSwing, HangFromBeam,
+HangUnderVerticalBeam, LedgeCrawl, LedgeGrab, RocketJump, Roll, StandOnBeam, StandUp,
+SurfaceSwim, VineGrab, ZeroGPoleGrab, ZeroGSwim`
+
+⚠️ Expect the usual trap: `Player.Update` sets `animation` every frame, so assigning it will
+need the same treatment as everything else in this feature — see the rule above. `ZeroGPoleGrab`
+and `ZeroGSwim` are worth a look too, since they're the vanilla states for moving without
+gravity and may already carry poses closer to what we want.
+
 ### Feet cannot grasp — a known limitation
 `PlayerGraphics.hands` is `SlugcatHand[2]` (real `Limb`s), but `PlayerGraphics.legs` is a single
 `GenericBodyPart`, not a pair of limbs. So **only the hands can grip discrete points**; the feet
