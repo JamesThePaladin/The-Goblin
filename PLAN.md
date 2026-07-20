@@ -2,7 +2,43 @@
 
 *A smaller, faster slugcat that starts friendly with scavengers and can climb walls like a lizard. Built on SlugBase 2 / BepInEx, targeting multiplayer (Jolly Co-op).*
 
-Planning draft — Jul 2026. Verify the "Preflight" section against the live game before investing time.
+---
+
+## 📍 STATUS — 2026-07-19. Mechanically COMPLETE; only art remains.
+
+Every mechanical feature in this plan is built and **verified in-game**. Much of the detail
+below was written while planning and has since been answered, corrected, or superseded — the
+✅/❌/⚠️ markers are authoritative, the surrounding prose is history.
+
+**Done and verified:**
+
+| Feature | State |
+|---|---|
+| Selectable in Jolly Co-op | ✅ `SlugcatUnlocked` hook |
+| Rivulet's land agility kit | ✅ one `isRivulet` detour; **parity confirmed side-by-side in co-op** |
+| Speed / weight / diet / karma | ✅ JSON, incl. a workaround for `weight` not applying |
+| Small body (`body_scale` 0.2) | ✅ chunk scaling; limbs follow for free |
+| No heavy-carry lockout | ✅ `HeavyCarry` hook |
+| Custom tail texture | ✅ `dottedTail.png`, the first custom art in game |
+| **Wall-crawling** | ✅ the identity mechanic — grip points, both axes, face orientation |
+
+**Remaining — all of it art, none of it blocked on code:**
+1. **`HeadA` — 18 frames, ears drawn in.** The critical path: it unblocks the ears (procedural
+   ears were tried and dropped, see Feature 3), the body sprites, and judging the crawl poses.
+2. The rest of the sheet — body, hips, arms, legs, face.
+3. Then: crawl **animation states** (`DownOnFours` horizontally, `StandUp` vertically) — decided,
+   not built.
+
+**Known cosmetic loose ends:** breathing amplitude is ~5× oversized at 0.2 scale
+(`PlayerGraphics.breath` uses absolute units — likely resolved alongside the sprites); feet
+can't grip (rig has no leg limbs — rejected as out of scope, animation states substitute).
+
+**⚠️ Read the rule in Feature 4 before touching `PlayerGraphics` or physics.** It cost four
+failed attempts across three subsystems.
+
+---
+
+*Original planning draft below — Jul 2026.*
 
 ---
 
@@ -1037,19 +1073,32 @@ To re-enable: restore that file and add `"select_menu_scene": "Slugcat_Goblin"` 
 
 ## Suggested build order
 
-1. **Bare slugcat** — drop the corrected salvaged JSON into a fresh SlugTemplate, confirm it loads in the Remix menu and boots a campaign. This brings in baseline speed + friendly-with-scavengers (both done in that JSON) and validates the toolchain in one step.
-2. **JSON cleanup** — fix `auto_grab_batflies` → boolean `true`; remove both `select_menu_scene*` lines and the ghost scene (co-op-only for now); rename the multiplayer portrait PNGs off `-prototype`.
-3. **Smaller (sprite atlas + limb re-anchor)** — draw the smaller body from scratch, register the `FAtlas`, and in the **same `PlayerGraphics.DrawSprites` hook** offset the hand/leg positions so limbs don't emerge from the cheeks. Art and this one hook together. Sits partly on the code track now (not fully independent), but doesn't depend on the movement hooks.
-4. **Keep-up movement (Rivulet's pace + jump kit)** — first code feature, and hook work. Order: jump-height hook (adapt the `super_jump` example) → pounce/side-wall wall-jump on top of it → tune to Rivulet's real numbers from the Find-Usages pass. Gate per-player (feature `TryGet(player)`). Both this and wall-walking touch `Player` movement, so do this first and keep the hooks tidy for #5.
-5. **Wall-walking (lizard-flow)** — last. Lizard-code study, confirm the feel, prototype in isolation, integrate with per-player gating and the movement hooks.
+**✅ 1–5 ALL COMPLETE as of 2026-07-19** — kept for the record; see the STATUS block at the top
+of this file for current state.
+
+1. ~~Bare slugcat~~ ✅ loads, boots, selectable in co-op.
+2. ~~JSON cleanup~~ ✅ `auto_grab_batflies` boolean, scenes removed (art kept), portraits renamed.
+3. ~~Smaller~~ ✅ — but **not the way this line predicted.** The `DrawSprites` limb re-anchor was
+   never needed: scaling the body *chunks* (not the sprite) makes limbs follow for free. Sprites
+   are drawn at vanilla template dimensions and the system shrinks them. Art still outstanding.
+4. ~~Keep-up movement~~ ✅ — and far cheaper than planned. Not a jump-height hook plus pounce plus
+   wall-jump; **one detour on `Player.isRivulet`** grants her entire land kit with her exact
+   constants. Rivulet parity verified side-by-side in co-op.
+5. ~~Wall-walking~~ ✅ — the identity mechanic, done. "Rip lizard traversal exactly" proved
+   **infeasible** (their movement comes from AI pathfinding a Player has no access to), so it's a
+   physics-affordance design instead: gravity suspension gated on real terrain, kinematic
+   vertical, hands holding discrete grip points.
+
+**The remaining work is art**, in this order: `HeadA` (18 frames, ears drawn in) → the rest of the
+sheet → crawl animation states.
 
 ---
 
 ## Open decisions
 
-- **Movement** ✅ *decided:* not a Rivulet clone, but "keep up" is **hook work, not JSON** — jump height (via a `super_jump`-style `Player.Jump` hook) plus pounce and the side-wall wall-jump that build on it. Decompile reads her values **and** code paths. Water excluded. (Side-wall wall-jump ≠ the lizard wall-walk in Feature 4.)
+- **Movement** ✅ *BUILT, verified:* he *does* effectively take Rivulet's whole land kit, via one detour on `Player.isRivulet` — the same mechanism Expedition's "Agility" unlock uses. No hand-built jump/pounce/wall-jump hooks were needed. Water excluded structurally (her swim stats are name-keyed in `SlugcatStats` and cannot transfer).
 - **Scavenger friendliness** ✅ *decided:* start fully friendly but **losable** (`like:1, strength:1`, no `locked`).
-- **Wall-walking feel** ✅ *tentative:* cling-crawl baseline, aiming for lizard-grade seamless wall↔floor flow at no speed cost — final call after reading the lizard code.
+- **Wall-walking feel** ✅ *SETTLED, built:* **cling-crawl**, confirmed by Sanctus — *"his little hands and feet need to grasp the same points the lizards do so it looks like he is crawling, not running."* Speed is explicitly not the goal; the Rivulet kit covers pace. An interim push toward wall-*running* with tangent projection was wrong and abandoned — tangent projection is also unnecessary, since clinging happens on the background plane.
 - **Access** ✅ *decided:* Jolly Co-op-only for now. Both select-menu scenes removed (art PNGs kept for later). Consequence: `world_state` + `start_room` deferred (co-op uses host's world), and campaign-carousel presentation is unwired.
 - **World state** ⏸️ *deferred:* Survivor/White baseline is the plan *when* he becomes a standalone campaign character; irrelevant while co-op-only.
 - *Still open:* `start_room` (deferred with world_state); exact water-exclusion boundary for movement; how faithful the wall-flow can be (code-dependent). *(Co-op selectability resolved — see Preflight; fixed via a `SlugcatUnlocked` hook.)*

@@ -17,22 +17,48 @@ Full design + current state + decompile checklists live in **`PLAN.md`** — rea
 - SlugBase custom-feature pattern: `PlayerFeature<T>`/`GameFeature<T>` + hook + `TryGet`; re-apply on `SlugBaseCharacter.Refreshed`.
 
 ## Current state
-Salvaged from the old repo and rebuilt on a fresh SlugTemplate. See `PLAN.md` for detail.
+**Mechanically COMPLETE and verified in-game (2026-07-19). Only art remains.** `PLAN.md` has
+full detail; its STATUS block at the top is authoritative where older prose disagrees.
 
-**Done (JSON):**
-- Baseline speed stats (walk/climb/tunnel + weight/lung/loudness).
-- Friendly-with-scavengers via built-in `alignments` — **losable, not locked**: `{ "like": 1, "strength": 1 }` (starts fully friendly, can drop if he wrongs them) + maul blacklist + diet stun-on-eat.
+**Done and verified:**
+- **Movement — Rivulet parity, confirmed side-by-side in co-op.** Achieved with ONE detour on
+  `Player.isRivulet` (RuntimeDetour — HookGen emits no property-getter hooks), which grants her
+  entire land agility kit with her exact constants. No hand-built jump/pounce/wall-jump hooks
+  were needed. Her swim stats are name-keyed in `SlugcatStats` and cannot transfer.
+- **Wall-crawling — the identity mechanic.** Held on SPECIAL (`input[0].spec`). Gravity
+  suspension gated on real terrain (`Tile.wallbehind`, or adjacent `Solid`/`Slope` — so he can't
+  hang in mid-air), kinematic vertical movement, hands holding discrete grip points, face turned
+  along the crawl direction. Feel is **cling-crawl, NOT wall-running**.
+- **Small body** — `body_scale` 0.2 by scaling body *chunks*, not sprites; limbs follow for free,
+  so no `DrawSprites` re-anchor was ever needed. Sprites get drawn at vanilla template sizes.
+- Stats/diet/karma in JSON, custom tail texture, no heavy-carry lockout, co-op selectable.
 
-**Not done — real work remaining:**
-- **Keep-up movement (Rivulet's pace + jump kit)** — C# HOOK work, not JSON (jump height, pounce, and the 2D side-wall wall-jump are not SlugBase JSON features). Goal: keep up with Rivulet in co-op without cloning her; his identity is wall-walking. Pattern = the template's `super_jump` example: `PlayerFeature<float>` + a `Player.Jump` hook scaling `jumpBoost`. Order: jump height first (it feeds pounce + the side-wall wall-jump), then those. Decompile: Find Usages on the Rivulet `SlugcatStats.Name` enum to read her real jump/speed values AND code paths; match feel, exclude water. NOTE: side-wall wall-jump (2D vertical surfaces) is this feature; lizard wall-walk (climbing background/terrain) is the separate feature below — don't conflate.
-- **Smaller body** — art (custom sprite atlas, drawn from scratch) **+ `PlayerGraphics` code**. Arms/legs are positioned procedurally in `PlayerGraphics.DrawSprites` relative to body chunks, so a smaller body makes limbs emerge from the wrong spot ("arms out the cheeks") unless the hand/leg sprite positions are offset in that hook — drawing smaller RE-triggers the anchor problem, it doesn't avoid it. **Sprite integration DECIDED: self-contained** (`FAtlas` + `PlayerGraphics.DrawSprites`), no DMS — the same hook does the limb re-anchor (one hook, two jobs). Color intent: `00FFFF` = UI/icon; body is white (`custom_colors` Body ≈ white) with a hand-drawn cyan stripe (color is multiply-style, so a white body preserves drawn colors); `#000000` = transparent, use `#0E0202`. Grab the DMS `ModTemplate.zip` for templates even though we're off-DMS. Select-menu scene art already done.
-- **Wall-walking like lizards** — HARD, greenfield; this is the Goblin's movement identity. Goal: lizard-grade seamless wall↔floor flow with NO speed cost (rip lizard traversal exactly if feasible); cling-crawl is the fallback. Study lizard terrain-grip code first. Shares `Player` movement surface with the speed work — sequence after it.
+**Remaining — all art, none blocked on code:**
+1. **`HeadA` (18 frames, ears drawn in)** — the critical path. Procedural ears were built and
+   deliberately dropped (far ear rendered in front of the head; they led the direction of travel).
+2. The rest of the sheet — body, hips, arms, legs, face.
+3. Then crawl **animation states** (`DownOnFours` horizontal, `StandUp` vertical) — decided, unbuilt.
 
-**JSON cleanup outstanding:**
-1. `auto_grab_batflies` must be boolean `true`, not the string `"true"`.
-2. Remove both `select_menu_scene` and `select_menu_scene_ascended`, and the broken ghost scene JSON — **Goblin is Jolly Co-op-only for now**, campaign-select presentation not wired up. KEEP the select-scene art PNGs for later re-enabling. Rename the 8 multiplayer portrait PNGs off `-prototype` (co-op still uses those).
+**Art notes:** DMS templates are already on disk at
+`workshop/content/312520/2948971756/dressmyslugcat/`. `#000000` renders transparent — use
+`#0E0202`. Keep the body white so drawn colours survive the multiply; `00FFFF` is UI/icon only.
 
-**Access / world:** Jolly Co-op-only for now. Co-op players run in the HOST's campaign world, so the Goblin's own `world_state` and `start_room` are **deferred/irrelevant** until he becomes a standalone campaign character (plan then: Survivor/White baseline; avoid Saint/frozen + Rivulet/flooded). Note: removing the select scenes removes the *art*, not necessarily single-player-carousel access — no clean SlugBase "co-op-only" flag was found, but that doesn't matter for a WIP. Confirm the custom slugcat is actually selectable as a Player-2+ in Jolly Co-op.
+## ⚠️ The rule that cost the most time
+**Anything vanilla recomputes every frame will beat a value you set alongside it. Own the final
+value.** This burned four attempts across three subsystems — `self.gravity` (reassigned in
+`Player.Update`, and the value read after `orig` is NOT what `BodyChunk.Update` applied),
+`hand.mode`/`absoluteHuntPos` (`SlugcatHand.Update` reassigns and consumes both in one pass), and
+ear sprite parenting. What worked every time was setting the end result directly: `chunk.pos.y`,
+`hand.pos`. Full table in `PLAN.md` Feature 4.
+
+## Workflow
+- **SlugBase hot-reloads character JSON; the plugin DLL does NOT.** After any rebuild the game
+  needs a full restart, or you're testing the old DLL while JSON changes appear to work.
+- Build with `dotnet build -c Release` from the repo root; the post-build step deploys to
+  `mod/plugins/`. BepInEx logs to `BepInEx/LogOutput.log` (`AppendLog` is on); managed exceptions
+  land in `exceptionLog.txt` in the game root.
+- **BepInEx only injects under Proton with launch options** `WINEDLLOVERRIDES="winhttp=n,b" %command%`.
+  If the Goblin vanishes entirely, check that before suspecting the mod.
 
 ## Working style
 - When reading decompiled code, rename cryptic locals and explain logic before changing anything.
