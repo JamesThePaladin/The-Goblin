@@ -576,6 +576,110 @@ the `.txt`'s declared dimensions need to agree with it. FS ears were procedural
 (`Circle20` + parameters), so there is no "ear file" to recover unless custom ear sprites were
 packed.
 
+### Ears — implementation plan (research done 2026-07-19)
+Ears are **procedural appendages, not sprite frames** (confirmed twice: FS drew them from
+`Circle20` with angle/length/width sliders; DMS builds them as `TailSegment[][]` driven off
+`LastHeadRotation`). So this is code, and it does not touch the 87-frame atlas at all.
+
+**The template is the vanilla tail.** `PlayerGraphics` builds a 4-segment chain:
+
+```csharp
+// TailSegment(GraphicsModule ow, float rad, float connectionRad,
+//             TailSegment cnSeg, float sfFric, float aFric,
+//             float affectPrevious, bool pullInPreviousPosition)
+tail[0] = new TailSegment(this, 6f,   4f, null,    0.85f, 1f, 1f,   true);
+tail[1] = new TailSegment(this, 4f,   7f, tail[0], 0.85f, 1f, 0.5f, true);
+tail[2] = new TailSegment(this, 2.5f, 7f, tail[1], 0.85f, 1f, 0.5f, true);
+tail[3] = new TailSegment(this, 1f,   7f, tail[2], 0.85f, 1f, 0.5f, true);
+```
+
+The tapering `rad` (6 → 4 → 2.5 → 1) is what thins it toward the tip; `connectionRad` is the
+segment spacing. Rendered as sprite index 2, a `TriangleMesh` of 13 triangles.
+
+**Ears = two short chains anchored to the head instead of the hips**, each rendered as its own
+`TriangleMesh`. Needs: `PlayerGraphics.ctor` (build chains), `InitiateSprites` (add meshes —
+note this **grows the sprite-leaser array**, so all downstream indices shift; DMS tracks this
+with `EarSpr[]`/`TotalSprites` rather than hardcoding), `AddToContainer`, `DrawSprites` (update
+mesh verts from segment positions), `ApplyPalette`, `Reset`.
+
+**Fennec constraint: ears must NOT inherit `body_scale`.** A fennec is a small body with
+*oversized* ears — keep ear size an independent parameter, as FS did.
+
+**Suggested first milestone — placeholder art.** Build the chains and render with an existing
+vanilla sprite (FS used `Circle20`) before drawing anything. That gives live feedback for
+tuning angle/length/width/droop, and the real texture drops in afterwards. Same staging FS used.
+
+#### Ear parameter reference (all live in `the_goblin.json`, hot-reload on respawn)
+
+| Key | What it does |
+|---|---|
+| `ear_angle` | Rest angle off the head axis. `0` = straight up, `90` = horizontal, `130` = 40° below horizontal (the original spec). Higher = more downward. |
+| `ear_length` | Total ear length in world units. |
+| `ear_width` | Half-width at the base; the tip narrows from here. |
+| `ear_segments` | Points in the chain. More = smoother arch + rounder tip, floppier, slightly costlier. 8 is a good default; 4 is visibly faceted. |
+| `ear_stiffness` | How hard it holds the rest pose. `0` = wet noodle, `0.95` = near-rigid. **~0.5 = "holds the angle but sweeps with motion".** |
+| `ear_droop` | Gravity pull. Higher = hangs more and overrides the rest angle. |
+| `ear_curve` | Degrees of extra bend **per segment** — this is the arch. `0` = straight, negative = arch the other way. |
+| `ear_tip` | Tip shape: `0` = sharp triangle (linear taper), `1` = rounded point (elliptical falloff). |
+
+**Tuning order matters.** `ear_stiffness` and `ear_droop` dominate: at low stiffness with high
+droop, gravity wins and both `ear_angle` and `ear_curve` are largely overruled — the ears just
+hang. Set stiffness first, then droop, then shape.
+
+**Baseline matching the stated design** (40° down, long, holds-but-moves, arched, rounded):
+`angle 130, length 20, width 5, segments 8, stiffness 0.5, droop 0.15, curve 8, tip 1`.
+
+**✅ Collision — DECIDED: ears do NOT collide with terrain** (Sanctus, 2026-07-19). Avoids the
+tail's known clip-through-terrain glitch and keeps them readable on a small head.
+
+**✅ Anchor + rotation — ANSWERED.** `PlayerGraphics.head` is a `GenericBodyPart`, so it has
+`pos` / `lastPos` / `vel` / `rad` like any other body part. That's the anchor. Vanilla
+`DrawSprites` derives head orientation as:
+
+```csharp
+Vector2 headPos = Vector2.Lerp(head.lastPos, head.pos, timeStacker);
+Vector2 bodyPos = Vector2.Lerp(drawPositions[1, 0], …, timeStacker);
+Vector2 facing  = Custom.DirVec(bodyPos, headPos);   // normalized body -> head
+```
+
+So head "rotation" is a **direction vector**, not an angle — which is exactly why DMS stores
+`LastHeadRotation` as a `Vector2`. Cache it for the same reasons: the value is needed in
+`DrawSprites` but derives from state updated in `Update`, and keeping the previous frame's
+value lets the ears lag//swing naturally instead of snapping.
+
+Attach ears at `head.pos` offset along `facing` (and its perpendicular for left/right), then
+let the `TailSegment` chain do the motion. Note `drawPositions` is a `Vector2[,]` of
+interpolated chunk positions — use it rather than raw chunk `pos` so ears stay smooth at high
+framerates.
+
+Also spotted: head bob is gated on `player.aerobicLevel > 0.5`, and is the same system behind
+the oversized-breathing artifact at small `body_scale`. Fixing one may fix the other.
+
+**✅ Sprite-leaser growth — ANSWERED, and it's safe if we append.** `InitiateSprites` computes
+the sprite count into a local via a chain of per-slugcat branches (base 12 → indices 0–11;
+specific slugcats add more, e.g. 13/14/17), then does `sLeaser.sprites = new FSprite[count]`.
+Critically it also stores **named** indices derived from that count — e.g.
+`gownIndex = count - 1`, i.e. the LAST slot.
+
+Therefore: **hook `InitiateSprites`, call `orig` first, then append.**
+
+```csharp
+int firstEar = sLeaser.sprites.Length;
+Array.Resize(ref sLeaser.sprites, firstEar + 2);
+sLeaser.sprites[firstEar]     = new TriangleMesh(...);   // left ear
+sLeaser.sprites[firstEar + 1] = new TriangleMesh(...);   // right ear
+```
+
+Appending past the end leaves every vanilla index (0–11) **and** every named index
+(`gownIndex`, etc.) valid, because they were computed against the pre-resize length. Never
+insert in the middle. Store `firstEar` per-`PlayerGraphics` in a `ConditionalWeakTable` rather
+than a field or a constant — the count is slugcat-dependent, so it is NOT a fixed number. This
+is precisely why DMS keeps `EarSpr[]` + `TotalSprites` in `EarsCWT`.
+
+Consequence: appended sprites are added to the container last, so they draw **on top** unless
+reordered. Hook `AddToContainer` to place them explicitly (ears likely want to sit behind the
+head, at least the far one).
+
 ### DMS-only — does NOT constrain us
 - The **asymmetric template system** (Front/Left/Right = 3 `.png` + 3 `.txt` per part, all required or it breaks) is a **DMS feature**, not vanilla. We get one atlas per part.
 - `metadata.json` per skin subfolder, the `dressmyslugcat/` folder layout, and author+skin ID naming.
