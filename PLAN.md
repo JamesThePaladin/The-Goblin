@@ -576,7 +576,44 @@ the `.txt`'s declared dimensions need to agree with it. FS ears were procedural
 (`Circle20` + parameters), so there is no "ear file" to recover unless custom ear sprites were
 packed.
 
-### Ears — implementation plan (research done 2026-07-19)
+### ❌ Ears — PROCEDURAL APPROACH ABANDONED 2026-07-19. Draw them into `HeadA` instead.
+Built, working, and dropped. Code preserved in commit `fa3fa21`; removed in the commit after.
+**Decision: ears are drawn into the 18 `HeadA` frames as art.** Do not rebuild the procedural
+system without re-reading why it failed:
+
+- **The far ear swings in front of the head.** Both ears share a single container depth, so
+  there is no per-side layering — when he turns, the "back" ear renders over the face. Fixing
+  it properly needs the two ears on separate depths that swap with facing, which the sprite
+  ordering makes awkward.
+- **They lead the direction of travel.** Orientation derives from the body→head vector, which
+  is movement-driven, so the ears point where he's going instead of sitting on his head.
+  Smoothing (`ear_follow`) reduced the jitter but not the underlying behaviour.
+- **It didn't read like Fancy Slugcats.** FS ears sat on the head and behaved like part of it;
+  the spring chain reads as separate dangling appendages.
+- **Cost/benefit.** The 18 `HeadA` frames had to be drawn regardless (vanilla heads have ears
+  baked in, so an earless head was already a hard dependency). Drawing ears onto frames that
+  were being drawn anyway is near-zero extra work, is stable by construction, and deletes ~350
+  lines plus a hook chain that caused one crash and tangles with DMS.
+
+**What we give up:** secondary motion — no sweep when running, no bounce on landing. Revisit
+only if the static ears feel lifeless in play.
+
+**Keep from the attempt** (still true and still useful):
+- `SpriteLeaser..ctor` calls `InitiateSprites` → `ApplyPalette` and **never `AddToContainer`**.
+  Sprites added during `InitiateSprites` must be parented explicitly or they never render.
+- Sprite indices are **per-leaser**, not per-`PlayerGraphics`, and DMS appends its own sprites
+  to the same array — always store per-leaser and bounds-check. Getting this wrong crashes on
+  shelter exit.
+- Never call a hooked method on yourself from inside another hook; it re-enters the chain
+  through other mods.
+
+### Tail texture — RECOVERED
+`mod/illustrations/dottedTail.png`, 126×64 RGBA, recovered from the Fancy Slugcats document.
+Near the guide's recommended 128×64. White field (takes the body colour) with cyan dots
+tapering toward the tip. Still needs wiring up as the tail atlas — the tail is a `TriangleMesh`
+with a UV texture, so it is independent of the 87-frame sheet.
+
+### (historical) Ears — procedural implementation plan (research 2026-07-19)
 Ears are **procedural appendages, not sprite frames** (confirmed twice: FS drew them from
 `Circle20` with angle/length/width sliders; DMS builds them as `TailSegment[][]` driven off
 `LastHeadRotation`). So this is code, and it does not touch the 87-frame atlas at all.

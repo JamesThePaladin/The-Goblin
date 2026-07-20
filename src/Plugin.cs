@@ -48,8 +48,6 @@ namespace SlugTemplate
             // Hoarding: don't let being small stop him carrying loot (PLAN.md Feature 1c).
             On.Player.HeavyCarry += Player_HeavyCarry;
 
-            GoblinEars.Apply();
-
             // EXPERIMENT — remove once the body-scale question is settled.
             On.Player.ctor += Player_ctor_BodyScale;
             On.Player.Update += Player_Update_ScaleDiagnostics;
