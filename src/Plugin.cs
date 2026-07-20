@@ -54,10 +54,8 @@ namespace SlugTemplate
             // Hoarding: don't let being small stop him carrying loot (PLAN.md Feature 1c).
             On.Player.HeavyCarry += Player_HeavyCarry;
 
-            // EXPERIMENT — remove once the body-scale question is settled.
+            // Body scale + the weight workaround (PLAN.md Feature 3).
             On.Player.ctor += Player_ctor_BodyScale;
-            On.Player.Update += Player_Update_ScaleDiagnostics;
-            On.SlugcatStats.ctor += SlugcatStats_ctor_Diagnostics;
         }
 
         // Set from OnEnable so the static hook helpers can log. BepInEx writes to
@@ -218,78 +216,7 @@ namespace SlugTemplate
                           $"(malnourished={stats.malnourished}); TotalMass now {self.TotalMass:0.###}");
         }
 
-        // Catches every SlugcatStats construction, so we can see the state SlugBase actually
-        // leaves the object in — as opposed to the state Player..ctor later observes.
-        //
-        // The puzzle: SlugBase's own SlugcatStats.ctor hook reads weight correctly
-        // (WeightMul.TryGet=True values=0.4,0.2) and ApplyStarve on a non-malnourished
-        // slugcat returns values[0], so bodyWeightFac SHOULD be 0.4. Player..ctor sees 1.0,
-        // yet sees runspeedFac=1.75 from the very same hook. Either weight is skipped at
-        // construction, or something resets it afterwards. This tells us which.
-        //
-        // Our hook is registered after SlugBase's, so calling orig() first runs SlugBase's
-        // inner hook and we observe the finished object.
-        private static void SlugcatStats_ctor_Diagnostics(On.SlugcatStats.orig_ctor orig, SlugcatStats self, SlugcatStats.Name slugcat, bool malnourished)
-        {
-            orig(self, slugcat, malnourished);
 
-            if (slugcat == null || slugcat.value != GoblinName)
-                return;
-
-            _log?.LogInfo($"[stats-ctor] name={slugcat.value} malnourished={malnourished} " +
-                          $"bodyWeightFac={self.bodyWeightFac:0.###} runspeedFac={self.runspeedFac:0.###} " +
-                          $"poleClimb={self.poleClimbSpeedFac:0.###} corridorClimb={self.corridorClimbSpeedFac:0.###} " +
-                          $"loudness={self.loudnessFac:0.###} lungs={self.lungsFac:0.###} throw={self.throwingSkill}");
-        }
-
-        private static int _diagTicks;
-
-        // THE measurement that decides the approach.
-        //
-        // Limbs are simulated, not drawn relative to the body sprite: hands anchor to
-        // bodyChunks[0] and legs to the hips chunk. So the question is whether their rest
-        // distance is derived from the chunk's rad or from hardcoded constants.
-        //
-        // Read `reach/rad` across several body_scale values:
-        //   - ratio STAYS ~constant  -> limbs follow rad for free. The physical approach
-        //                               needs no DrawSprites re-anchoring at all.
-        //   - ratio GROWS as scale shrinks -> limb rest distance is absolute, and we must
-        //                               offset the arm/leg sprites ourselves.
-        private static void Player_Update_ScaleDiagnostics(On.Player.orig_Update orig, Player self, bool eu)
-        {
-            orig(self, eu);
-
-            if (!IsGoblin(self) || self.room == null)
-                return;
-
-            // ~once per second at 40 ticks/s; this runs every frame otherwise and we already
-            // learned the hard way what per-frame logging costs.
-            if (++_diagTicks % 40 != 0)
-                return;
-
-            if (!(self.graphicsModule is PlayerGraphics graphics) || graphics.hands == null)
-                return;
-
-            var bodyChunk = self.bodyChunks[0];
-            var hipsChunk = self.bodyChunks[1];
-
-            string handInfo = "";
-            for (int i = 0; i < graphics.hands.Length; i++)
-            {
-                if (graphics.hands[i] == null) continue;
-                float reach = Vector2.Distance(graphics.hands[i].pos, bodyChunk.pos);
-                handInfo += $" hand{i}: reach={reach:0.##} reach/rad={reach / bodyChunk.rad:0.###}";
-            }
-
-            string legInfo = "";
-            if (graphics.legs != null)
-            {
-                float legReach = Vector2.Distance(graphics.legs.pos, hipsChunk.pos);
-                legInfo = $" legs: reach={legReach:0.##} reach/rad={legReach / hipsChunk.rad:0.###}";
-            }
-
-            _log?.LogInfo($"[bodyscale] rad0={bodyChunk.rad:0.##} rad1={hipsChunk.rad:0.##}{handInfo}{legInfo}");
-        }
 
         // Report the Goblin as unlocked; defer to the game for every other slugcat.
         // NOTE: this runs very hot (many calls per menu frame) — keep it allocation-free

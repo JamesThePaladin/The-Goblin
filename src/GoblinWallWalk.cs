@@ -28,14 +28,8 @@ namespace SlugTemplate
         /// <summary>Frames of continuous contact before he sticks.</summary>
         public static readonly PlayerFeature<float> GripDelay = PlayerFloat("thegoblin/wall_grip_delay");
 
-        /// <summary>
-        /// Friction while clinging, applied ONLY to axes the player isn't steering. 1 = none
-        /// (skates around on momentum), lower = firmer grip. This is deliberately not a blanket
-        /// velocity damp: the first version multiplied ALL velocity every frame, which felt like
-        /// wading through glue and quietly destroyed jump height. Ground friction works this way
-        /// too — you grip when you aren't pushing, and move freely when you are.
-        /// </summary>
-        public static readonly PlayerFeature<float> GripFriction = PlayerFloat("thegoblin/wall_grip_friction");
+        /// <summary>How quickly he reaches crawl speed. 1 = instant, lower = softer start.</summary>
+        public static readonly PlayerFeature<float> CrawlAccel = PlayerFloat("thegoblin/wall_crawl_accel");
 
         /// <summary>Crawl acceleration while clinging. This is a crawl, not a run.</summary>
         public static readonly PlayerFeature<float> CrawlSpeed = PlayerFloat("thegoblin/wall_crawl_speed");
@@ -54,6 +48,11 @@ namespace SlugTemplate
             // reads as crawling rather than sliding.
             public Vector2[] holds = new Vector2[2];
             public bool[] holding = new bool[2];
+
+            public bool clinging;
+            public Vector2 lookDir = new Vector2(0f, 1f);
+            public Vector2 move;
+            public float reach = 22f;
         }
 
         private static readonly ConditionalWeakTable<Player, GripState> States =
@@ -62,6 +61,32 @@ namespace SlugTemplate
         public static void Apply()
         {
             On.Player.Update += Player_Update;
+            On.PlayerGraphics.Update += PlayerGraphics_Update;
+        }
+
+        /// <summary>
+        /// Step 3: stop him staring at the camera while crawling.
+        ///
+        /// `lookDirection` is what shifts the face sprite within the head —
+        /// `Lerp(lastLookDir, lookDirection, t) * 3f`, with Mathf.Sign(x) flipping it. Pointing
+        /// it along the crawl direction turns his face where he's going instead of at the
+        /// viewer, which is what made wall-crawling look wrong.
+        ///
+        /// Runs on PlayerGraphics.Update, after Player.Update has refreshed the grip state.
+        /// </summary>
+        private static void PlayerGraphics_Update(On.PlayerGraphics.orig_Update orig, PlayerGraphics self)
+        {
+            orig(self);
+
+            if (self?.player == null) return;
+            if (!States.TryGetValue(self.player, out GripState state) || !state.clinging) return;
+
+            self.lookDirection = state.lookDir;
+
+            // Hand holds are applied HERE, not from Player.Update. PlayerGraphics.Update runs
+            // afterwards and vanilla reassigns the hand modes every frame, so grips set earlier
+            // were being overwritten — which is why he let go the moment he stopped moving.
+            UpdateHandHolds(self.player, state, state.move, state.reach);
         }
 
         private static void Player_Update(On.Player.orig_Update orig, Player self, bool eu)
@@ -72,12 +97,13 @@ namespace SlugTemplate
             if (!WallWalk.TryGet(self, out bool enabled) || !enabled) return;
 
             GripDelay.TryGet(self, out float delayF);
-            GripFriction.TryGet(self, out float friction);
+            CrawlAccel.TryGet(self, out float accel);
             CrawlSpeed.TryGet(self, out float crawl);
             GripReach.TryGet(self, out float reach);
 
             int delay = Mathf.Max(1, Mathf.RoundToInt(delayF <= 0f ? 4f : delayF));
-            if (friction <= 0f) friction = 0.8f;
+            if (accel <= 0f) accel = 0.35f;
+            accel = Mathf.Clamp01(accel);
             if (crawl <= 0f) crawl = 1.2f;
             if (reach <= 0f) reach = 22f;
 
@@ -96,9 +122,12 @@ namespace SlugTemplate
 
             if (state.contact < delay)
             {
+                state.clinging = false;
                 ReleaseHands(self, state);
                 return;
             }
+
+            state.clinging = true;
 
             // Cancel the gravity that orig() already applied this frame. `self.gravity` is the
             // value Player.Update just set, i.e. exactly what was subtracted from velocity.
@@ -117,20 +146,43 @@ namespace SlugTemplate
             Vector2 move = new Vector2(inp.x, inp.y);
             if (move.sqrMagnitude > 0.01f) move = move.normalized;
 
+            // Velocity TARGET, not an impulse. Earlier versions did `vel += move * crawl` every
+            // frame with damping only on unsteered axes, so the steered axis accumulated without
+            // limit — that's why it ran at roughly double his normal pace. Steering toward a
+            // target means `crawl` IS the top speed, in units per frame.
+            //
+            // It also fixes the drift. The gravity cancellation above leaves a tiny residual
+            // (Player.Update reassigns g at a different point in the frame than when
+            // BodyChunk.Update consumed it via `vel.y -= owner.gravity`). Previously that
+            // residual accumulated — downward as a slow slide, then upward as a constant climb
+            // once the slide was clamped. An axis with no input is now pinned to zero outright,
+            // so nothing can integrate: a grip simply does not slip, in either direction.
+            Vector2 target = move * crawl;
+
             foreach (var chunk in self.bodyChunks)
             {
-                chunk.vel.y += applied;
+                chunk.vel.x = steeringX ? Mathf.Lerp(chunk.vel.x, target.x, accel) : 0f;
 
-                if (friction < 1f)
-                {
-                    if (!steeringX) chunk.vel.x *= friction;
-                    if (!steeringY) chunk.vel.y *= friction;
-                }
-
-                chunk.vel += move * crawl;
+                // VERTICAL IS KINEMATIC — we set the displacement outright rather than trying to
+                // balance forces. Two earlier attempts failed because `self.gravity` read after
+                // orig() is NOT the value BodyChunk.Update actually applied, so both cancelling
+                // it and compensating for it were no-ops. That is also why only pinning position
+                // ever stopped the slide. Rather than keep guessing at the force balance, own
+                // the axis: while clinging he moves exactly `target.y` per frame vertically, or
+                // exactly nothing. Deterministic, and it makes up/down match left/right, which
+                // it previously didn't because gravity was silently eating part of the climb.
+                float dy = steeringY ? target.y : 0f;
+                chunk.pos.y = chunk.lastPos.y + dy;
+                chunk.vel.y = dy;
             }
 
-            UpdateHandHolds(self, state, move, reach);
+            // Face where he's crawling. Hold the last direction when idle rather than snapping
+            // back, so pausing mid-climb doesn't make him glance at the camera.
+            if (move.sqrMagnitude > 0.01f)
+                state.lookDir = move;
+
+            state.move = move;
+            state.reach = reach;
         }
 
         /// <summary>
@@ -173,8 +225,16 @@ namespace SlugTemplate
 
                 if (state.holding[i])
                 {
+                    // Driving mode/absoluteHuntPos does nothing: SlugcatHand.Update reassigns
+                    // both every frame AND moves the limb toward its own target in the same
+                    // pass, so anything we set post-orig is never read before being overwritten.
+                    // Set the resulting position directly instead. Lerping rather than snapping
+                    // keeps a visible reach when a hand moves to a new hold.
                     hand.mode = Limb.Mode.HuntAbsolutePosition;
                     hand.absoluteHuntPos = state.holds[i];
+
+                    hand.pos = Vector2.Lerp(hand.pos, state.holds[i], 0.4f);
+                    hand.vel *= 0.5f;
                 }
             }
         }

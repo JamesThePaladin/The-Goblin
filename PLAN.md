@@ -919,7 +919,31 @@ there is no surface normal to project against. Up/down/left/right are simply fre
 - Holds snap to tile centres (`room.MiddleOfTile`) so grips look deliberate, like the lizards'.
 - Tunables: `wall_crawl_speed`, `wall_grip_reach` (how far a hold may trail before re-gripping).
 
-### ❌ Step 3 — face/head orientation while crawling (deferred, do LAST)
+### ✅ Step 3 DONE, verified 2026-07-19 — face orientation while crawling
+`lookDirection` is what shifts the face sprite within the head (`DrawSprites` uses
+`Lerp(lastLookDir, lookDirection, t) * 3f`, with `Mathf.Sign(x)` flipping it). Pointing it along
+the crawl direction stops him staring at the camera. Set from `PlayerGraphics.Update`, and the
+last direction persists when idle — clearing it would make him snap to face the viewer every
+time you paused mid-climb, which looks worse than the original problem.
+
+### ⚠️ THE RULE THIS FEATURE TAUGHT — read before touching PlayerGraphics or physics again
+**Anything vanilla recomputes every frame will win over a value you set alongside it. Own the
+final value instead of negotiating with the system that produces it.** This cost four failed
+attempts across three subsystems:
+
+| Attempt | Why it did nothing |
+|---|---|
+| `self.gravity = 0f` post-`orig` | `Player.Update` assigns `g` every frame and consumes it inside `orig`. |
+| `vel.y += self.gravity` to cancel | The value read after `orig` is **not** what `BodyChunk.Update` applied — proven by the slide surviving, and by gravity-compensation doing nothing for climb speed. |
+| Zeroing `vel.y` to stop the slide | `BodyChunk.Update` moves `pos` in the same pass, so the displacement had already happened. |
+| `hand.mode` / `absoluteHuntPos` | `SlugcatHand.Update` reassigns both AND moves the limb in the same pass; the value was never read before being overwritten. |
+
+What worked in every case was taking the final value directly: `chunk.pos.y` for vertical
+movement, `hand.pos` for grips. Vertical clinging is now **kinematic** — exactly `target.y` per
+frame or exactly nothing — which is also what made up/down match left/right, since gravity was
+silently eating part of the climb.
+
+### (historical) Step 3 — face/head orientation while crawling
 Sanctus: the face shouldn't stare at the camera while wall-crawling — it'll look wrong. Needs
 the head/face to orient to the crawl direction. Deferred deliberately until the crawl feel is
 settled, and it interacts with the (unstarted) custom head sprites: `HeadA` frame groups are
