@@ -37,11 +37,23 @@ namespace SlugTemplate
         /// </summary>
         public static readonly PlayerFeature<float> GripFriction = PlayerFloat("thegoblin/wall_grip_friction");
 
+        /// <summary>Crawl acceleration while clinging. This is a crawl, not a run.</summary>
+        public static readonly PlayerFeature<float> CrawlSpeed = PlayerFloat("thegoblin/wall_crawl_speed");
+
+        /// <summary>How far a hand's hold can trail the body before it reaches for a new one.</summary>
+        public static readonly PlayerFeature<float> GripReach = PlayerFloat("thegoblin/wall_grip_reach");
+
         private const float TileSize = 20f;
 
         private class GripState
         {
             public int contact;
+
+            // Where each hand is currently holding, in world space. Hands hold a fixed point
+            // while the body moves past it, then reach for a new one — that alternation is what
+            // reads as crawling rather than sliding.
+            public Vector2[] holds = new Vector2[2];
+            public bool[] holding = new bool[2];
         }
 
         private static readonly ConditionalWeakTable<Player, GripState> States =
@@ -61,9 +73,13 @@ namespace SlugTemplate
 
             GripDelay.TryGet(self, out float delayF);
             GripFriction.TryGet(self, out float friction);
+            CrawlSpeed.TryGet(self, out float crawl);
+            GripReach.TryGet(self, out float reach);
 
             int delay = Mathf.Max(1, Mathf.RoundToInt(delayF <= 0f ? 4f : delayF));
             if (friction <= 0f) friction = 0.8f;
+            if (crawl <= 0f) crawl = 1.2f;
+            if (reach <= 0f) reach = 22f;
 
             GripState state = States.GetValue(self, _ => new GripState());
 
@@ -78,7 +94,11 @@ namespace SlugTemplate
             else
                 state.contact = 0;   // release instantly, so letting go feels responsive
 
-            if (state.contact < delay) return;
+            if (state.contact < delay)
+            {
+                ReleaseHands(self, state);
+                return;
+            }
 
             // Cancel the gravity that orig() already applied this frame. `self.gravity` is the
             // value Player.Update just set, i.e. exactly what was subtracted from velocity.
@@ -91,6 +111,12 @@ namespace SlugTemplate
             bool steeringX = inp.x != 0;
             bool steeringY = inp.y != 0;
 
+            // Crawl on BOTH axes. Clinging happens on the background plane, so there is no
+            // surface tangent to project onto — up/down/left/right are simply free, which is
+            // what lets him climb rather than only shuffle sideways.
+            Vector2 move = new Vector2(inp.x, inp.y);
+            if (move.sqrMagnitude > 0.01f) move = move.normalized;
+
             foreach (var chunk in self.bodyChunks)
             {
                 chunk.vel.y += applied;
@@ -100,7 +126,64 @@ namespace SlugTemplate
                     if (!steeringX) chunk.vel.x *= friction;
                     if (!steeringY) chunk.vel.y *= friction;
                 }
+
+                chunk.vel += move * crawl;
             }
+
+            UpdateHandHolds(self, state, move, reach);
+        }
+
+        /// <summary>
+        /// Drives the hands to grasp fixed points, the way LizardLimb holds a grabPos while the
+        /// body moves past it. Each hand keeps its hold until the body has trailed too far, then
+        /// reaches for a new point ahead. Only one hand re-grips at a time, so there is always a
+        /// hand planted — that alternation is what makes it read as crawling rather than sliding.
+        /// </summary>
+        private static void UpdateHandHolds(Player self, GripState state, Vector2 move, float reach)
+        {
+            if (!(self.graphicsModule is PlayerGraphics graphics) || graphics.hands == null) return;
+
+            Vector2 body = self.bodyChunks[0].pos;
+
+            // Perpendicular to travel, so the two hands straddle the direction of movement.
+            Vector2 dir = move.sqrMagnitude > 0.01f ? move : new Vector2(0f, 1f);
+            Vector2 side = new Vector2(-dir.y, dir.x);
+
+            bool someoneReaching = false;
+
+            for (int i = 0; i < graphics.hands.Length && i < 2; i++)
+            {
+                var hand = graphics.hands[i];
+                if (hand == null) continue;
+
+                float sign = i == 0 ? -1f : 1f;
+                bool tooFar = !state.holding[i] || Vector2.Distance(body, state.holds[i]) > reach;
+
+                // Stagger: never let both hands leave the wall in the same frame.
+                if (tooFar && !someoneReaching)
+                {
+                    Vector2 target = body + dir * (reach * 0.5f) + side * (sign * 8f);
+                    if (self.room.GetTile(target).Terrain != Room.Tile.TerrainType.Solid)
+                    {
+                        state.holds[i] = self.room.MiddleOfTile(target);
+                        state.holding[i] = true;
+                        someoneReaching = true;
+                    }
+                }
+
+                if (state.holding[i])
+                {
+                    hand.mode = Limb.Mode.HuntAbsolutePosition;
+                    hand.absoluteHuntPos = state.holds[i];
+                }
+            }
+        }
+
+        /// <summary>Hands go back to normal control the moment he stops clinging.</summary>
+        private static void ReleaseHands(Player self, GripState state)
+        {
+            state.holding[0] = false;
+            state.holding[1] = false;
         }
 
         /// <summary>

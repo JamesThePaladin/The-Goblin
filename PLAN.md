@@ -898,11 +898,39 @@ hang over a pit.
 Tunables in `the_goblin.json`: `wall_walk` (bool), `wall_grip_delay` (frames of contact before
 sticking, hysteresis), `wall_grip_friction` (1 = ice, lower = firmer grip; 0.8 default).
 
-### ❌ Step 2 — tangent projection (NOT done; this is where "no speed cost" is won)
-Input is still mapped to **world** axes, so on a vertical wall left/right pushes sideways rather
-than up/down the wall face. He currently *hovers beside* walls rather than *runs along* them.
-Project the input vector onto the contacting surface's tangent, and derive the surface normal
-from which neighbour tiles are solid. This is the remaining work for lizard-grade flow.
+### 🔁 Feel decision CONFIRMED 2026-07-19: **cling-CRAWL, not wall-running**
+The plan's tentative "cling-crawl" is the real target. An earlier draft of step 2 aimed at
+wall-*running* with tangent projection — **wrong**. Sanctus: *"his little hands and feet need to
+grasp the same points the lizards do so it looks like he is crawling on the background walls,
+not running."* Speed is explicitly **not** the goal here; the Rivulet kit already covers pace.
+
+Also note **tangent projection is unnecessary**: clinging happens on the *background plane*, so
+there is no surface normal to project against. Up/down/left/right are simply free axes.
+
+### ✅ Step 2 DONE, verified in-game 2026-07-19 — crawl movement + hand grasping
+- **Both axes.** Input drives velocity in x *and* y while clinging, so he can climb, not just
+  shuffle sideways. Acceleration is `wall_crawl_speed` (crawl pace, deliberately modest).
+- **Hands grasp fixed points**, mirroring `LizardLimb`: a limb reaches a target, "grabs"
+  (`GrabbedTerrain()` stores `grabPos`, clears `reachingForTerrain`), then holds while the body
+  moves past. Player `SlugcatHand` extends the same `Limb` base, so we drive
+  `mode = Limb.Mode.HuntAbsolutePosition` + `absoluteHuntPos`.
+- **Staggered.** Only one hand re-grips per frame, so a hand is always planted. That alternation
+  is what reads as crawling instead of sliding.
+- Holds snap to tile centres (`room.MiddleOfTile`) so grips look deliberate, like the lizards'.
+- Tunables: `wall_crawl_speed`, `wall_grip_reach` (how far a hold may trail before re-gripping).
+
+### ❌ Step 3 — face/head orientation while crawling (deferred, do LAST)
+Sanctus: the face shouldn't stare at the camera while wall-crawling — it'll look wrong. Needs
+the head/face to orient to the crawl direction. Deferred deliberately until the crawl feel is
+settled, and it interacts with the (unstarted) custom head sprites: `HeadA` frame groups are
+0–3 idle, 4–5 turning, 6–7 crawl turn, 8–17 static down, so the *crawl turn* frames already
+exist in the vanilla sheet and may be usable directly.
+
+### Feet cannot grasp — a known limitation
+`PlayerGraphics.hands` is `SlugcatHand[2]` (real `Limb`s), but `PlayerGraphics.legs` is a single
+`GenericBodyPart`, not a pair of limbs. So **only the hands can grip discrete points**; the feet
+follow the body. If the crawl needs four-point contact to read correctly, that means adding leg
+limbs ourselves — a much larger job. Judge from the two-hand version first.
 
 - **Task 0 (before any movement code):** read the lizard climbing/terrain-grip code. How they detect climbable tiles, choose grip points, and transition wall↔floor **without losing speed**. Determine how much is directly reusable for a `Player`.
   - Look at: `Lizard` AI / movement, base `Creature` terrain-traversal, how they evaluate `Room.Tile` terrain for grip.

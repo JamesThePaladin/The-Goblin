@@ -14,6 +14,8 @@
 		"thegoblin/wall_walk": true,
 		"thegoblin/wall_grip_delay": 4,
 		"thegoblin/wall_grip_friction": 0.8,
+		"thegoblin/wall_crawl_speed": 1.2,
+		"thegoblin/wall_grip_reach": 22,
 		"tunnel_speed": [1.6, 1.6],
 		"climb_speed": [1.8, 1.8],
 		"walk_speed": [1.75, 1.75],
