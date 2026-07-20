@@ -45,6 +45,9 @@ namespace SlugTemplate
             // Movement: borrow Rivulet's whole land agility kit (see PLAN.md Feature 1b).
             HookRivuletAgility();
 
+            // Custom tail texture (PLAN.md Feature 3).
+            GoblinTail.Apply();
+
             // Hoarding: don't let being small stop him carrying loot (PLAN.md Feature 1c).
             On.Player.HeavyCarry += Player_HeavyCarry;
 
@@ -299,7 +302,8 @@ namespace SlugTemplate
         //Load any resources, such as sprites or sounds
         private void LoadResources(RainWorld rainWorld)
         {
-
+            // Runs at OnModsInit, once the game's file system and Futile are ready.
+            GoblinTail.LoadTexture(_log);
         }
 
         //// Implement MeanLizards

@@ -607,11 +607,25 @@ only if the static ears feel lifeless in play.
 - Never call a hooked method on yourself from inside another hook; it re-enters the chain
   through other mods.
 
-### Tail texture — RECOVERED
-`mod/illustrations/dottedTail.png`, 126×64 RGBA, recovered from the Fancy Slugcats document.
-Near the guide's recommended 128×64. White field (takes the body colour) with cyan dots
-tapering toward the tip. Still needs wiring up as the tail atlas — the tail is a `TriangleMesh`
-with a UV texture, so it is independent of the 87-frame sheet.
+### ✅ Tail texture — DONE 2026-07-19, verified in-game
+`mod/illustrations/dottedTail.png`, 126×64 RGBA, recovered from the Fancy Slugcats document
+(near the guide's recommended 128×64 — exact size doesn't matter, only that it's declared
+consistently). White field takes the body colour; cyan dots taper toward the tip.
+
+Implemented in `src/GoblinTail.cs`. **This is the first piece of custom art actually in the
+game** — and it was cheap precisely because the tail is a `TriangleMesh` with a UV texture
+rather than frames in the 87-sprite sheet: no atlas packing, no frame names, no anchor rules.
+
+Two things vanilla doesn't do, which we supply:
+- **The element.** Vanilla builds the tail mesh with `Futile_White`; we swap in the loaded atlas.
+- **`UVvertices`.** Vanilla never sets them — a flat white tail has no need. Mapping derived
+  from the triangle list: the mesh has `segments * 4 - 1` vertices (15 for the standard 4
+  segments), laid out as consecutive left/right pairs running base→tip, ending in a single tip
+  vertex. So `u` = 0→1 along the pairs, `v` = 0→1 across the width, tip centred at `(1, 0.5)`.
+
+Texture loads at `OnModsInit` with `FilterMode.Point` (bilinear blurs pixel art) and logs its
+dimensions. Needs `lib/UnityEngine.ImageConversionModule.dll` for `Texture2D.LoadImage`, copied
+from the game's `Managed/` folder like the other reference DLLs.
 
 ### (historical) Ears — procedural implementation plan (research 2026-07-19)
 Ears are **procedural appendages, not sprite frames** (confirmed twice: FS drew them from
